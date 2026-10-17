@@ -1,0 +1,4 @@
+Benchmark                               (version)  Mode  Cnt   Score   Error  Units
+JSQLParserBenchmark.parseSQLStatements     latest  avgt   15   7.602 ± 0.135  ms/op
+JSQLParserBenchmark.parseSQLStatements        5.3  avgt   15  80.758 ± 2.718  ms/op
+JSQLParserBenchmark.parseSQLStatements        5.1  avgt   15  83.231 ± 2.200  ms/op

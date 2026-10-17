@@ -1,0 +1,142 @@
+/*-
+ * #%L
+ * JSQLParser library
+ * %%
+ * Copyright (C) 2004 - 2019 JSQLParser
+ * %%
+ * Dual licensed under GNU LGPL 2.1 or Apache License 2.0
+ * #L%
+ */
+package net.sf.jsqlparser.statement.select;
+
+import java.io.Serializable;
+
+import java.util.Locale;
+import net.sf.jsqlparser.expression.Expression;
+
+public class OrderByElement implements Serializable {
+
+    private Expression expression;
+    // postgres rollup is an ExpressionList
+    private boolean mysqlWithRollup = false;
+    private boolean asc = true;
+    private boolean ascDescPresent = false;
+    private NullOrdering nullOrdering;
+    private WithFill withFill;
+
+    public boolean isAsc() {
+        return asc;
+    }
+
+    public void setAsc(boolean asc) {
+        this.asc = asc;
+    }
+
+    public NullOrdering getNullOrdering() {
+        return nullOrdering;
+    }
+
+    public void setNullOrdering(NullOrdering nullOrdering) {
+        this.nullOrdering = nullOrdering;
+    }
+
+    public WithFill getWithFill() {
+        return withFill;
+    }
+
+    public OrderByElement setWithFill(WithFill withFill) {
+        this.withFill = withFill;
+        return this;
+    }
+
+    public OrderByElement withWithFill(WithFill withFill) {
+        setWithFill(withFill);
+        return this;
+    }
+
+    public boolean isAscDescPresent() {
+        return ascDescPresent;
+    }
+
+    public void setAscDescPresent(boolean ascDescPresent) {
+        this.ascDescPresent = ascDescPresent;
+    }
+
+    public <T, S> T accept(OrderByVisitor<T> orderByVisitor, S context) {
+        return orderByVisitor.visit(this, context);
+    }
+
+    public Expression getExpression() {
+        return expression;
+    }
+
+    public void setExpression(Expression expression) {
+        this.expression = expression;
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder b = new StringBuilder();
+        b.append(expression.toString());
+
+        if (!asc) {
+            b.append(" DESC");
+        } else if (ascDescPresent) {
+            b.append(" ASC");
+        }
+
+        if (nullOrdering != null) {
+            b.append(' ');
+            b.append(nullOrdering == NullOrdering.NULLS_FIRST ? "NULLS FIRST" : "NULLS LAST");
+        }
+        if (withFill != null) {
+            b.append(' ').append(withFill);
+        }
+        if (isMysqlWithRollup()) {
+            b.append(" WITH ROLLUP");
+        }
+        return b.toString();
+    }
+
+    public OrderByElement withExpression(Expression expression) {
+        this.setExpression(expression);
+        return this;
+    }
+
+    public OrderByElement withAsc(boolean asc) {
+        this.setAsc(asc);
+        return this;
+    }
+
+    public OrderByElement withAscDescPresent(boolean ascDescPresent) {
+        this.setAscDescPresent(ascDescPresent);
+        return this;
+    }
+
+    public OrderByElement withNullOrdering(NullOrdering nullOrdering) {
+        this.setNullOrdering(nullOrdering);
+        return this;
+    }
+
+    public <E extends Expression> E getExpression(Class<E> type) {
+        return type.cast(getExpression());
+    }
+
+    public boolean isMysqlWithRollup() {
+        return mysqlWithRollup;
+    }
+
+    public OrderByElement setMysqlWithRollup(boolean mysqlWithRollup) {
+        this.mysqlWithRollup = mysqlWithRollup;
+        return this;
+    }
+
+    public enum NullOrdering {
+        NULLS_FIRST, NULLS_LAST;
+
+        public static NullOrdering from(String ordering) {
+            return Enum.valueOf(NullOrdering.class, ordering.toUpperCase(Locale.ROOT));
+        }
+    }
+
+}

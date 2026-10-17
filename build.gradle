@@ -1,0 +1,848 @@
+import se.bjurr.gitchangelog.plugin.gradle.GitChangelogTask
+import com.nwalsh.gradle.saxon.SaxonXsltTask
+
+import java.time.Instant
+
+buildscript {
+    dependencies {
+        classpath group: 'net.sf.saxon', name: 'Saxon-HE', version: 'latest.release'
+    }
+}
+
+plugins {
+    id 'java'
+    id "com.vanniktech.maven.publish" version "latest.release"
+    id 'maven-publish'
+    id 'signing'
+
+    id "org.javacc.javacc" version "latest.release"
+    id 'jacoco'
+    id 'com.github.kt3k.coveralls' version "latest.release"
+    id "com.github.spotbugs" version "latest.release"
+    id "com.diffplug.spotless" version "latest.release"
+    id 'pmd'
+    id 'checkstyle'
+    id 'eclipse'
+
+    // download the RR tools which have no Maven Repository
+    id "de.undercouch.download" version "latest.release"
+    id 'org.hidetake.ssh' version "latest.release"
+
+    id "se.bjurr.gitchangelog.git-changelog-gradle-plugin" version "latest.release"
+    id "me.champeau.jmh" version "latest.release"
+    id "com.nwalsh.gradle.saxon.saxon-gradle" version "latest.release"
+    id 'biz.aQute.bnd.builder' version "latest.release"
+}
+
+def getVersion = { boolean considerSnapshot ->
+    Integer major = 0
+    Integer minor = 0
+    Integer patch = null
+    Integer build = null
+    String commit = null
+    String snapshot = ""
+
+    def versionStr = providers.exec {
+        commandLine "git", "--no-pager", "-C", project.projectDir,  "describe", "--tags", "--always", "--dirty=-SNAPSHOT"
+    }.standardOutput.asText.get().trim()
+
+    def pattern = /jsqlparser-(?<major>\d*)\.(?<minor>\d*)(\.(?<patch>\d*))?(-(?<build>\d*)-(?<commit>[a-zA-Z\d]*))?/
+    def matcher = versionStr =~ pattern
+
+    if (matcher.find()) {
+        major = matcher.group('major') as Integer ?: 0
+        minor = matcher.group('minor') as Integer ?: 0
+        patch = matcher.group('patch') as Integer ?: null
+        build = matcher.group('build') as Integer ?: null
+        commit = matcher.group('commit') ?: null
+    }
+
+    if (considerSnapshot && (versionStr.endsWith('SNAPSHOT') || build != null)) {
+        minor++
+        if (patch != null) patch = 0
+        snapshot = "-SNAPSHOT"
+    }
+
+    return "${major}.${minor}" +
+            (patch != null ? ".${patch}" : "") +
+            (build != null ? ".${build}" : "") +
+            snapshot
+}
+
+
+// for publishing a release, call Gradle with Environment Variable RELEASE:
+// RELEASE=true gradle JSQLParser:publish
+version = getVersion( !System.getenv("RELEASE") )
+group = 'com.manticore-projects.jsqlformatter'
+description = 'JSQLParser library'
+
+tasks.register('generateBuildInfo') {
+    outputs.dir layout.buildDirectory.file("resources/main")
+    doLast {
+        def outputDir =  new File( layout.buildDirectory.file("generated/sources/buildinfo/java/main").get().asFile, "net/sf/jsqlparser")
+        outputDir.mkdirs()
+
+        def gitVersionStr = providers.exec {
+            commandLine "git", "--no-pager", "-C", project.projectDir,  "describe", "--tags", "--always", "--dirty=-SNAPSHOT"
+        }.standardOutput.asText.get().trim()
+
+        def gitCommitStr = providers.exec {
+            commandLine "git", "--no-pager", "-C", project.projectDir,  "rev-parse", "--short", "HEAD"
+        }.standardOutput.asText.get().trim()
+
+        def buildTime = Instant.now().toString()
+
+        def content = """\
+            |package net.sf.jsqlparser;
+            |
+            |public final class BuildInfo {
+            |  public static final String NAME = "${project.name}";
+            |  public static final String VERSION = "${gitVersionStr}";
+            |  public static final String GIT_COMMIT = "${gitCommitStr ?: 'unknown'}";
+            |  public static final String BUILD_TIME = "${buildTime}";
+            |}
+            """.stripMargin()
+
+        new File(outputDir, "BuildInfo.java").text = content
+    }
+}
+
+// Make sure the file is included in the compiled sources
+sourceSets {
+    main {
+        java {
+            srcDir layout.buildDirectory.file("generated/sources/buildinfo/java/main").get().asFile
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    mustRunAfter("generateBuildInfo")
+}
+
+tasks.withType(Pmd).configureEach {
+    mustRunAfter("generateBuildInfo")
+}
+
+tasks.withType(Checkstyle).configureEach {
+    exclude '**/module-info.java', '**/package-info.java'
+
+    mustRunAfter("generateBuildInfo")
+}
+
+repositories {
+    mavenCentral()
+    maven { url "https://dev.saxonica.com/maven" }
+}
+
+configurations {
+    xmlDoclet
+}
+
+dependencies {
+    testImplementation 'commons-io:commons-io:2.+'
+    testImplementation 'org.apache.commons:commons-text:+'
+    testImplementation 'org.mockito:mockito-core:+'
+    testImplementation 'org.assertj:assertj-core:+'
+    testImplementation 'org.hamcrest:hamcrest-core:+'
+    testImplementation 'org.apache.commons:commons-lang3:+'
+    testImplementation 'com.h2database:h2:+'
+
+    // for JaCoCo Reports
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.+'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.+'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.+'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:5+'
+
+    // https://mvnrepository.com/artifact/org.mockito/mockito-junit-jupiter
+    testImplementation 'org.mockito:mockito-junit-jupiter:5.+'
+
+    // Performance Benchmark
+    testImplementation 'org.openjdk.jmh:jmh-core:+'
+    testImplementation 'org.openjdk.jmh:jmh-generator-annprocess:+'
+
+    // Java Doc in XML Format
+    xmlDoclet ('com.manticore-projects.tools:xml-doclet:+'){ changing = true }
+
+    // enforce latest version of JavaCC
+    testImplementation('com.manticore-projects.jsqlformatter:javacc-core:[8.1.2.1941,)')
+    testImplementation('com.manticore-projects.jsqlformatter:javacc-java:[8.1.2.1941,)')
+
+    jmh 'org.openjdk.jmh:jmh-core:+'
+    jmh 'org.openjdk.jmh:jmh-generator-annprocess:+'
+    javacc('com.manticore-projects.jsqlformatter:javacc-core:[8.1.2.1941,)')
+    javacc('com.manticore-projects.jsqlformatter:javacc-java:[8.1.2.1941,)')
+}
+
+compileJavacc {
+    arguments = [
+            grammar_encoding: 'UTF-8',
+            static: 'false',
+            java_template_type: 'modern',
+            // Comment this in to build the parser with tracing.
+            DEBUG_PARSER: 'false',
+            DEBUG_LOOKAHEAD: 'false',
+            LEGACY_EXCEPTION_HANDLING: 'false'
+    ]
+}
+
+java {
+    withSourcesJar()
+    // withJavadocJar()
+
+    sourceCompatibility = '11'
+    targetCompatibility = '11'
+
+    // needed for XML-Doclet to work (since Doclet changed again with Java 13)
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
+javadoc {
+    include("build/generated/javacc/net/sf/jsqlparser/parser/*.java" )
+    if(JavaVersion.current().isJava9Compatible()) {
+        options.addBooleanOption('html5', true)
+    }
+    options.addBooleanOption("Xdoclint:none", true)
+}
+
+jar {
+    manifest {
+        attributes (
+                "Automatic-Module-Name": "net.sf.jsqlparser"
+        )
+    }
+
+    bundle {
+        properties.empty()
+        bnd(
+                "Created-By": System.properties.get('user.name'),
+                "Bundle-SymbolicName": "net.sf.jsqlparser",
+                "Import-Package": "*",
+                "Export-Package": "net.sf.jsqlparser.*",
+                "Automatic-Module-Name": "net.sf.jsqlparser"
+        )
+    }
+
+    dependsOn(generateBuildInfo)
+}
+
+tasks.register('xmldoc', Javadoc) {
+    dependsOn(compileJavacc)
+
+    def outFile =  reporting.file(
+            version.endsWith("-SNAPSHOT")
+                    ? "xmlDoclet/javadoc_snapshot.xml"
+                    : "xmlDoclet/javadoc_stable.xml"
+    )
+
+    source = sourceSets.main.allJava
+    // add any generated Java sources
+    source += fileTree(layout.buildDirectory.dir("generated/javacc").get().asFile) {
+        include '**/*.java'
+    }
+    source += fileTree(layout.buildDirectory.dir("generated/jjtree").get().asFile) {
+        include '**/*.java'
+    }
+
+    classpath = sourceSets.main.runtimeClasspath
+
+    destinationDir = reporting.file("xmlDoclet")
+    options.docletpath = configurations.xmlDoclet.files as List
+    options.doclet = "com.manticore.tools.xmldoclet.XmlDoclet"
+    title = "API $version"
+
+    options.addStringOption("basePackage", "net.sf.jsqlparser")
+    options.addStringOption("filename", outFile.getName())
+
+    doLast {
+        copy {
+            from outFile
+            into layout.projectDirectory.dir("src/site/sphinx/").asFile
+        }
+    }
+}
+
+test {
+    environment = [ 'EXPORT_TEST_TO_FILE': 'False' ]
+    useJUnitPlatform()
+
+    // set heap size for the test JVM(s)
+    minHeapSize = "1G"
+    maxHeapSize = "4G"
+
+    // set JVM stack size
+    jvmArgs = ['-Xss4m', '--add-opens=java.base/java.lang=ALL-UNNAMED']
+
+    jacoco {
+        excludes = ['net/sf/jsqlparser/parser/CCJSqlParserTokenManager']
+    }
+}
+
+coveralls {
+    jacocoReportPath 'build/reports/jacoco/test/jacocoTestReport.xml'
+}
+
+jacocoTestReport {
+    dependsOn test // tests are required to run before generating the report
+    reports {
+        xml.required = false
+        csv.required = false
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco')
+    }
+}
+jacocoTestCoverageVerification {
+    // Jacoco can't handle the TokenManager class
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [
+                    "**CCJSqlParserTokenManager**"
+            ])
+        }))
+    }
+    violationRules {
+        rule {
+            //element = 'CLASS'
+            limit {
+                //@todo: temporarily reduced it 80%, we need to bring that back to 84% accepting the Keywords PR
+                minimum = 0.50
+            }
+            excludes = [
+                    'net.sf.jsqlparser.util.validation.*',
+                    'net.sf.jsqlparser.**.*Adapter',
+                    'net.sf.jsqlparser.parser.**'
+            ]
+        }
+        rule {
+            //element = 'CLASS'
+            limit {
+                counter = 'LINE'
+                value = 'MISSEDCOUNT'
+
+                //@todo: temporarily increased to 7000, we need to bring that down to 5500 after accepting the Keywords PR
+                maximum = 20000
+            }
+            excludes = [
+                    'net.sf.jsqlparser.util.validation.*',
+                    'net.sf.jsqlparser.**.*Adapter',
+                    'net.sf.jsqlparser.parser.**'
+            ]
+        }
+//        rule {
+//            element = 'CLASS'
+//            limit {
+//                counter = 'LINE'
+//                value = 'MISSEDRATIO'
+//                maximum = 0.3
+//            }
+//           excludes = [
+//                    'net.sf.jsqlparser.util.validation.*',
+//                    'net.sf.jsqlparser.**.*Adapter',
+//                    'net.sf.jsqlparser.parser.**'
+//            ]
+//        }
+    }
+}
+
+spotbugsMain {
+    reports {
+        html.required.set(true)
+        html.outputLocation.set( layout.buildDirectory.file("reports/spotbugs/main/spotbugs.html").get().asFile )
+        html.stylesheet="fancy-hist.xsl"
+    }
+}
+
+
+spotbugs {
+    // fail only on P1 and without the net.sf.jsqlparser.parser.*
+    excludeFilter = file("config/spotbugs/spotBugsExcludeFilter.xml")
+}
+
+// do not run over the test, although we should do that eventually
+tasks.named('spotbugsTest').configure {
+    enabled = false
+}
+
+pmd {
+    // later versions throw NPE
+    toolVersion = '7.17.0'
+
+    consoleOutput = true
+    sourceSets = [sourceSets.main]
+
+    // clear the ruleset in order to use configured rules only
+    ruleSets = []
+    rulesMinimumPriority = 2
+    ruleSetFiles = files("config/pmd/ruleset.xml")
+}
+
+tasks.named('pmdMain').configure {
+    excludes = [
+            "build/generated/*"
+            , "**/net/sf/jsqlparser/parser/SimpleCharStream.java"
+    ]
+}
+
+checkstyle {
+    sourceSets = [sourceSets.main, sourceSets.test]
+    configFile = rootProject.file('config/checkstyle/checkstyle.xml')
+}
+
+tasks.withType(Checkstyle).configureEach {
+    reports {
+        xml.required = false
+        html.required = true
+    }
+    excludes = [
+            "**/module-info.java"
+            , "net/sf/jsqlparser/parser/SimpleCharStream.java"
+    ]
+}
+
+spotless {
+    // optional: limit format enforcement to just the files changed by this feature branch
+    ratchetFrom 'origin/master'
+
+    format 'misc', {
+        // define the files to apply `misc` to
+        target '*.rst', '*.md', '.gitignore'
+
+        // define the steps to apply to those files
+        trimTrailingWhitespace()
+        leadingTabsToSpaces(4)
+        endWithNewline()
+    }
+    java {
+        leadingTabsToSpaces(4)
+        eclipse().configFile('config/formatter/eclipse-java-google-style.xml')
+    }
+}
+
+
+tasks.register('renderRR') {
+    dependsOn(compileJavacc)
+
+    doLast {
+        def rrDir = layout.buildDirectory.dir("rr").get().asFile
+
+        // Download convert.war
+        download.run {
+            src 'http://manticore-projects.com/download/convert.war'
+            dest new File(rrDir, "convert.war")
+            overwrite false
+            onlyIfModified true
+        }
+
+        // Download rr.war
+        download.run {
+            src 'http://manticore-projects.com/download/rr.war'
+            dest new File(rrDir, "rr.war")
+            overwrite false
+            onlyIfModified true
+            tempAndMove true
+        }
+
+        // Convert JJ file to EBNF
+        def ebnfFile = new File(rrDir, "JSqlParserCC.ebnf")
+        def jjFile = layout.buildDirectory.dir("generated/jjtree/net/sf/jsqlparser/parser/JSqlParserCC.jj").get().asFile.absolutePath
+
+        def convertProc = new ProcessBuilder('java',
+                '-Djdk.xml.maxElementDepth=0',
+                '-jar',
+                new File(rrDir, "convert.war").absolutePath,
+                jjFile)
+                .redirectOutput(ebnfFile)
+                .redirectErrorStream(true)
+                .start()
+        if (convertProc.waitFor() != 0) {
+            throw new GradleException("Failed to convert JJ to EBNF")
+        }
+
+        // Generate RR diagrams
+        def rrProc = new ProcessBuilder('java', '-jar',
+                new File(rrDir, "rr.war").absolutePath,
+                "-noepsilon",
+                "-color:#4D88FF",
+                "-offset:0",
+                "-width:800",
+                "-out:${new File(rrDir, "JSqlParserCC.xhtml")}",
+                new File(rrDir, "JSqlParserCC.ebnf").absolutePath)
+                .redirectErrorStream(true)
+                .start()
+        rrProc.inputStream.eachLine { logger.info(it) }
+        if (rrProc.waitFor() != 0) {
+            throw new GradleException("Failed to generate RR diagrams")
+        }
+    }
+}
+
+
+tasks.register('gitChangelogTask', GitChangelogTask) {
+    fromRepo.set( file("$projectDir").toString() )
+    file.set( new File("${projectDir}/src/site/sphinx/changelog.rst") )
+    fromRevision.set( "4.0")
+    //toRef = "1.1";
+
+    // switch off the formatter since the indentation matters for Mark-down
+    // @formatter:off
+    templateContent.set ("""
+************************
+Changelog
+************************
+
+
+{{#tags}}
+{{#ifMatches name "^Unreleased.*"}}
+Latest Changes since |JSQLPARSER_VERSION|
+{{/ifMatches}}
+{{#ifMatches name "^(?!Unreleased).*"}}
+Version {{name}}
+{{/ifMatches}}
+=============================================================
+
+ {{#issues}}
+
+  {{#commits}}
+   {{#ifMatches messageTitle "^(?!Merge).*"}}
+  * **{{{messageTitle}}}**
+
+    {{authorName}}, {{commitDate}}
+   {{/ifMatches}}
+  {{/commits}}
+
+ {{/issues}}
+{{/tags}}
+""")
+    // @formatter:on
+}
+
+tasks.register('updateKeywords', JavaExec) {
+    group = "Execution"
+    description = "Generate the Reserved Keywords documentation"
+    classpath = sourceSets.main.runtimeClasspath
+    args = [
+            file('src/main/jjtree/net/sf/jsqlparser/parser/JSqlParserCC.jjt').absolutePath
+            , file('src/site/sphinx/keywords.rst').absolutePath
+    ]
+    mainClass.set("net.sf.jsqlparser.parser.ParserKeywordsUtils")
+
+    dependsOn(compileJava)
+}
+
+tasks.register('xslt', SaxonXsltTask) {
+    def outFile = version.endsWith("-SNAPSHOT")
+            ? file("src/site/sphinx/syntax_snapshot.rst")
+            : file("src/site/sphinx/syntax_stable.rst")
+
+    dependsOn(renderRR)
+    stylesheet file('src/main/resources/rr/xhtml2rst.xsl')
+
+    parameters(
+            "withFloatingToc": System.getProperty("FLOATING_TOC", "false"),
+            "isSnapshot": Boolean.toString(version.endsWith("-SNAPSHOT"))
+    )
+
+    // Transform every .xml file in the "input" directory.
+    input layout.buildDirectory.file("rr/JSqlParserCC.xhtml").get()
+    output outFile
+}
+
+tasks.register('sphinx', Exec) {
+    dependsOn(gitChangelogTask, renderRR, xslt, xmldoc)
+
+    String PROLOG = """
+.. |_| unicode:: U+00A0
+    :trim:
+
+.. |JSQLPARSER_EMAIL| replace:: support@manticore-projects.com
+.. |JSQLPARSER_VERSION| replace:: ${getVersion(false)}
+.. |JSQLPARSER_SNAPSHOT_VERSION| replace:: ${getVersion(true)}
+.. |JSQLPARSER_STABLE_VERSION_LINK| raw:: html
+
+    <a href='http://manticore-projects.com/download/${project.name}-${getVersion(false)}/${project.name}-${getVersion(false)}.jar'>${project.name}-${getVersion(false)}.jar</a>
+
+.. |JSQLPARSER_SNAPSHOT_VERSION_LINK| raw:: html
+
+    <a href='http://manticore-projects.com/download/${project.name}-${getVersion(false)}/${project.name}-${getVersion(true)}.jar'>${project.name}-${getVersion(true)}.jar</a>
+
+"""
+
+    args = [
+            "-Dproject=JSQLParser"
+            , "-Dcopyright=Tobias Warneke, 2022"
+            , "-Dauthor=Tobias Warneke"
+            , "-Drelease=${getVersion(false)}"
+            , "-Drst_prolog=$PROLOG"
+            , "${projectDir}/src/site/sphinx"
+            , layout.buildDirectory.file("sphinx").get().asFile
+    ]
+
+    executable "sphinx-build"
+
+    //store the output instead of printing to the console:
+    standardOutput = new ByteArrayOutputStream()
+
+    //extension method stopTomcat.output() can be used to obtain the output:
+    ext.output = {
+        return standardOutput.toString()
+    }
+}
+
+// `publish` is Gradle's own task; the Central Portal upload runs under `publishToMavenCentral`.
+// Both need the same prerequisites, or a CI job invoking the latter silently skips check and docs.
+tasks.matching { it.name in ['publish', 'publishToMavenCentral'] }.configureEach {
+    dependsOn(check, gitChangelogTask, renderRR, xslt, xmldoc)
+}
+
+mavenPublishing {
+    publishToMavenCentral(true)
+    signAllPublications()
+
+    coordinates(group, "jsqlparser", version)
+
+    pom {
+        name.set('JSQLParser library')
+        description.set('Parse SQL Statements into Abstract Syntax Trees (AST)')
+        url.set('https://github.com/JSQLParser/JSqlParser')
+
+        licenses {
+            license {
+                name.set('GNU Library or Lesser General Public License (LGPL) V2.1')
+                url.set('http://www.gnu.org/licenses/lgpl-2.1.html')
+            }
+            license {
+                name.set('The Apache Software License, Version 2.0')
+                url.set('http://www.apache.org/licenses/LICENSE-2.0.txt')
+            }
+        }
+
+        developers {
+            developer {
+                id.set('twa')
+                name.set('Tobias Warneke')
+                email.set('t.warneke@gmx.net')
+            }
+            developer {
+                id.set('are')
+                name.set('Andreas Reichel')
+                email.set('andreas@manticore-projects.com')
+            }
+        }
+
+        scm {
+            connection.set('scm:git:https://github.com/JSQLParser/JSqlParser.git')
+            developerConnection.set('scm:git:ssh://git@github.com:JSQLParser/JSqlParser.git')
+            url.set('https://github.com/JSQLParser/JSqlParser.git')
+        }
+    }
+}
+
+// Signing and its task wiring are handled by mavenPublishing.signAllPublications() above.
+// The manual `signing { required { ... hasTask("publish") } }` block that used to live here
+// never matched the `publishToMavenCentral` task, so the two disagreed about whether to sign.
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+
+    // javac's parser is recursive descent: one stack frame per level of nesting. The generated
+    // CCJSqlParser is nested deeply enough to exhaust the default thread stack, which surfaces as
+    // "An exception has occurred in the compiler ... java.lang.StackOverflowError" - a compiler
+    // crash, not a compile error, and not a bug worth reporting to Oracle.
+    //
+    // -Xss only takes effect at JVM launch, so the compiler has to run in its own process:
+    // setting forkOptions without options.fork = true silently does nothing.
+    options.fork = true
+    options.forkOptions.jvmArgs = (options.forkOptions.jvmArgs ?: []) + ['-Xss16m']
+}
+
+// javadoc parses the same sources in a forked process and hits the same wall
+tasks.withType(Javadoc).configureEach {
+    options.setJFlags((options.getJFlags() ?: []) + ['-Xss16m'])
+}
+
+remotes {
+    webServer {
+        host = findProperty("${project.name}.host") ?: "defaultHost" // Provide default if not found
+        user = findProperty("${project.name}.username") ?: "defaultUsername" // Provide default if not found
+        identity = file("${System.getProperty('user.home')}/.ssh/id_rsa")
+    }
+}
+
+
+tasks.register('upload') {
+    doFirst {
+        if (findProperty("${project.name}.host") == null) {
+            println(
+                    """
+                Property \"${project.name}.host\' not found.
+                Please define \"${project.name}.host\" in the Gradle configuration (e. g. \$HOME/.gradle/gradle.properties.
+                """
+            )
+        }
+    }
+    doLast {
+        ssh.run {
+            session(remotes.webServer) {
+                def versionStable = getVersion(false)
+                execute "mkdir -p download/${project.name}-${versionStable}"
+                for (File file: fileTree(include:['*.jar'], dir: layout.buildDirectory.dir("libs").get()).collect()) {
+                    put from: file, into: "download/${project.name}-${versionStable}"
+                }
+            }
+        }
+    }
+
+    dependsOn(check, assemble, gitChangelogTask, renderRR, xslt, xmldoc)
+}
+
+check {
+    dependsOn jacocoTestCoverageVerification
+}
+
+jmh {
+    jmhVersion = '1.37'
+    jvmArgs = [
+            "--enable-native-access=ALL-UNNAMED"
+            , "--add-opens=java.base/sun.misc=ALL-UNNAMED"
+            , "--add-opens=java.base/java.lang=ALL-UNNAMED"
+            , "-XX:+UnlockDiagnosticVMOptions"
+            , "-XX:+DebugNonSafepoints"
+    ]
+
+    // Profiling is opt-in because the native library path depends on the host.
+    profilers = providers.gradleProperty('jmhProfiler').map { [it] }.getOrElse([])
+
+    includes = ['.*JSQLParserBenchmark.*']
+    warmupIterations = 2
+    fork = 3
+    iterations = 5
+    timeOnIteration = '1s'
+}
+
+// ---------------------------------------------------------------------------------------------
+// Grammar ambiguity gate
+//
+// JavaCC reports choice conflicts as "Warning: ..." on stdout and still exits 0, so an ambiguity
+// introduced by a PR is completely invisible to `./gradlew check`. The `org.javacc.javacc` plugin
+// forwards that output to the Gradle logger, where it cannot be inspected either.
+//
+// This task therefore re-runs JavaCC on the JJTree output, into a throwaway directory, captures
+// stdout+stderr and fails when any warning survives the allow list.
+// ---------------------------------------------------------------------------------------------
+
+// Regexes for warnings that are known-benign. Add an entry ONLY together with a comment saying
+// why. Never add a "Choice conflict" pattern here — that is the thing this gate exists to catch.
+def grammarWarningAllowList = [
+        // JJTree copies the options block into the .jj; re-passing -OUTPUT_DIRECTORY on the
+        // command line makes JavaCC complain that it overrides the in-file value.
+        ~/^Warning: .*Command line setting of .* modifies option value in file\./,
+
+        // -OUTPUT_DIRECTORY points at a scratch directory that is wiped before every run, so
+        // JavaCC always announces that it is creating it. Housekeeping, not a grammar problem.
+        ~/^Warning: Output directory .* does not exist\. Creating the directory\./
+]
+
+def javaccMainClassOverride = project.findProperty('javaccMainClass')
+
+tasks.register('checkGrammarAmbiguity') {
+    group = 'verification'
+    description = 'Fails the build when JavaCC reports choice conflicts (grammar ambiguities).'
+
+    dependsOn(compileJavacc)
+
+    def jjFile = layout.buildDirectory
+            .file('generated/jjtree/net/sf/jsqlparser/parser/JSqlParserCC.jj')
+    def scratchDir = layout.buildDirectory.dir('grammar-check')
+    def reportFile = layout.buildDirectory.file('reports/grammar/javacc-warnings.txt')
+    def javaccClasspath = configurations.javacc
+    def allowList = grammarWarningAllowList
+    def mainClassOverride = javaccMainClassOverride
+
+    inputs.file(jjFile)
+    inputs.files(javaccClasspath)
+    outputs.file(reportFile)
+
+    doLast {
+        def jj = jjFile.get().asFile
+        if (!jj.exists()) {
+            throw new GradleException("Generated grammar not found: ${jj} — did compileJavacc run?")
+        }
+
+        def out = scratchDir.get().asFile
+        out.deleteDir()
+        out.mkdirs()
+
+        // JavaCC 8 splits into javacc-core / javacc-java; take Main-Class from whichever jar
+        // declares one, so this keeps working across upgrades of the Manticore JavaCC branch.
+        def mainClass = mainClassOverride ?: javaccClasspath.files.findResult { f ->
+            if (!f.name.endsWith('.jar')) {
+                return null
+            }
+            new java.util.jar.JarFile(f).withCloseable { jar ->
+                jar.manifest?.mainAttributes?.getValue('Main-Class')
+            }
+        } ?: 'org.javacc.parser.Main'
+
+        def isWindows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('win')
+        def javaExe = new File(new File(System.getProperty('java.home'), 'bin'),
+                isWindows ? 'java.exe' : 'java')
+
+        def proc = new ProcessBuilder(
+                javaExe.absolutePath,
+                '-cp', javaccClasspath.asPath,
+                mainClass.toString(),
+                '-GRAMMAR_ENCODING=UTF-8',
+                "-OUTPUT_DIRECTORY=${out.absolutePath}".toString(),
+                jj.absolutePath)
+                .directory(out)
+                .redirectErrorStream(true)
+                .start()
+
+        def output = proc.inputStream.getText('UTF-8')
+        def exit = proc.waitFor()
+
+        // Warnings are multi-line: a "Warning:" header followed by indented continuation lines.
+        def warnings = []
+        def current = null
+        output.eachLine { line ->
+            if (line.startsWith('Warning:')) {
+                current = new StringBuilder(line)
+                warnings << current
+            } else if (current != null && line.startsWith(' ')) {
+                current.append('\n').append(line)
+            } else {
+                current = null
+            }
+        }
+
+        def offending = warnings
+                .collect { it.toString() }
+                .findAll { w -> allowList.every { !(w =~ it) } }
+
+        def report = reportFile.get().asFile
+        report.parentFile.mkdirs()
+        report.setText(offending.isEmpty() ? 'No JavaCC grammar warnings.\n'
+                : offending.join('\n\n') + '\n', 'UTF-8')
+
+        if (exit != 0) {
+            logger.error(output)
+            throw new GradleException("JavaCC exited with ${exit} while analysing the grammar.")
+        }
+
+        if (!offending.isEmpty()) {
+            def conflicts = offending.count { it.contains('Choice conflict') }
+            logger.error("\n${offending.join('\n\n')}\n")
+            throw new GradleException(
+                    "${offending.size()} JavaCC grammar warning(s), ${conflicts} of them choice " +
+                            "conflicts. Resolve the ambiguity or add an explicit LOOKAHEAD to the earlier " +
+                            "expansion. Report: ${report}")
+        }
+
+        logger.lifecycle('Grammar is free of JavaCC choice conflicts.')
+    }
+}
+
+tasks.named('check') {
+    dependsOn('checkGrammarAmbiguity')
+}

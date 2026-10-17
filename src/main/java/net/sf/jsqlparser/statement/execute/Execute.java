@@ -1,0 +1,123 @@
+/*-
+ * #%L
+ * JSQLParser library
+ * %%
+ * Copyright (C) 2004 - 2019 JSQLParser
+ * %%
+ * Dual licensed under GNU LGPL 2.1 or Apache License 2.0
+ * #L%
+ */
+package net.sf.jsqlparser.statement.execute;
+
+import java.util.Locale;
+import java.util.StringJoiner;
+import java.util.function.Consumer;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.ParenthesedExpressionList;
+import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.StatementVisitor;
+
+import java.util.List;
+
+public class Execute implements Statement {
+
+    private ExecType execType = ExecType.EXECUTE;
+    private String name;
+    private ExpressionList exprList;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void setName(List<String> names) {
+        StringJoiner qualifiedName = new StringJoiner(".");
+        for (String item : names) {
+            qualifiedName.add(item == null ? "" : item);
+        }
+        this.name = qualifiedName.toString();
+    }
+
+    public ExpressionList getExprList() {
+        return exprList;
+    }
+
+    public void setExprList(ExpressionList exprList) {
+        this.exprList = exprList;
+    }
+
+    public ExecType getExecType() {
+        return execType;
+    }
+
+    public void setExecType(ExecType execType) {
+        this.execType = execType;
+    }
+
+    @Deprecated
+    public boolean isParenthesis() {
+        return exprList instanceof ParenthesedExpressionList;
+    }
+
+    @Override
+    public <T, S> T accept(StatementVisitor<T> statementVisitor, S context) {
+        return statementVisitor.visit(this, context);
+    }
+
+    @Override
+    public String toString() {
+        StringBuilder builder = new StringBuilder();
+        return appendTo(builder, builder::append).toString();
+    }
+
+    public StringBuilder appendTo(StringBuilder builder, Consumer<Expression> expressionPrinter) {
+        if (execType != ExecType.IMPLICIT) {
+            builder.append(execType.name()).append(' ');
+        }
+        builder.append(name);
+        if (exprList != null) {
+            builder.append(' ');
+            boolean brackets = exprList instanceof ParenthesedExpressionList;
+            if (brackets) {
+                builder.append('(');
+            }
+            for (int i = 0; i < exprList.size(); i++) {
+                if (i > 0) {
+                    builder.append(", ");
+                }
+                expressionPrinter.accept((Expression) exprList.get(i));
+            }
+            if (brackets) {
+                builder.append(')');
+            }
+        }
+        return builder;
+    }
+
+    public Execute withExecType(ExecType execType) {
+        this.setExecType(execType);
+        return this;
+    }
+
+    public Execute withName(String name) {
+        this.setName(name);
+        return this;
+    }
+
+    public Execute withExprList(ExpressionList exprList) {
+        this.setExprList(exprList);
+        return this;
+    }
+
+    public enum ExecType {
+        EXECUTE, EXEC, CALL, IMPLICIT;
+
+        public static ExecType from(String type) {
+            return Enum.valueOf(ExecType.class, type.toUpperCase(Locale.ROOT));
+        }
+    }
+}

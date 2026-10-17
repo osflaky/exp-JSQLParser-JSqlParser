@@ -1,0 +1,1752 @@
+/*-
+ * #%L
+ * JSQLParser library
+ * %%
+ * Copyright (C) 2004 - 2019 JSQLParser
+ * %%
+ * Dual licensed under GNU LGPL 2.1 or Apache License 2.0
+ * #L%
+ */
+package net.sf.jsqlparser.statement.alter;
+
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.schema.Table;
+import net.sf.jsqlparser.statement.ReferentialAction;
+import net.sf.jsqlparser.statement.ReferentialAction.Action;
+import net.sf.jsqlparser.statement.ReferentialAction.Type;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
+import net.sf.jsqlparser.statement.create.table.ColumnDefinition;
+import net.sf.jsqlparser.statement.create.table.Index;
+import net.sf.jsqlparser.statement.create.table.PartitionDefinition;
+import net.sf.jsqlparser.statement.select.PlainSelect;
+
+@SuppressWarnings({"PMD.CyclomaticComplexity"})
+public class AlterExpression implements Serializable {
+
+    public enum TableRenameKeyword {
+        NONE, TO, AS
+    }
+
+    private final Set<ReferentialAction> referentialActions = new LinkedHashSet<>(2);
+    private AlterOperation operation;
+    private String optionalSpecifier;
+    private Table newTable;
+    private TableRenameKeyword tableRenameKeyword = TableRenameKeyword.TO;
+    private String columnName;
+    // private ColDataType dataType;
+    private String columnOldName;
+    private List<ColumnDataType> colDataTypeList;
+    private List<ColumnDropNotNull> columnDropNotNullList;
+    private List<ColumnSetNotNull> columnSetNotNullList;
+    private List<ColumnDropDefault> columnDropDefaultList;
+    private List<ColumnSetDefault> columnSetDefaultList;
+    private List<ColumnSetVisibility> columnSetVisibilityList;
+
+    private List<String> pkColumns;
+    private List<String> ukColumns;
+    private String ukName;
+    private Index index = null;
+    private Index oldIndex = null;
+    private String constraintName;
+    private boolean usingIfExists;
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    private List<String> fkColumns;
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    private String fkSourceSchema;
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    private String fkSourceTable;
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    private List<String> fkSourceColumns;
+    private boolean uk;
+    private boolean ukTypeSpecified;
+    private boolean useEqual;
+
+    private List<String> partitions;
+    private List<PartitionDefinition> partitionDefinitions;
+    private List<ConstraintState> constraints;
+    private List<String> parameters;
+
+    private ConvertType convertType;
+    private boolean hasEqualForCharacterSet;
+    private boolean hasEqualForCollate;
+
+    private String characterSet;
+    private String collation;
+    private boolean defaultCollateSpecified;
+    private String lockOption;
+    private String algorithmOption;
+    private String engineOption;
+    private String commentText;
+    private String tableOption;
+
+    private boolean hasColumn = false;
+    private boolean hasColumns = false;
+
+
+    private boolean useBrackets = false;
+
+    private boolean useIfNotExists = false;
+
+    private String partitionType;
+    private Expression partitionExpression;
+    private List<String> partitionColumns;
+    private int coalescePartitionNumber;
+
+    private String exchangePartitionTableName;
+    private boolean exchangePartitionWithValidation;
+    private boolean exchangePartitionWithoutValidation;
+
+    private int keyBlockSize;
+
+    private String constraintSymbol;
+    private boolean enforced;
+    private String constraintType;
+    private boolean invisible;
+
+    public Index getOldIndex() {
+        return oldIndex;
+    }
+
+    public void setOldIndex(Index oldIndex) {
+        this.oldIndex = oldIndex;
+    }
+
+    public boolean hasColumn() {
+        return hasColumn;
+    }
+
+    public boolean hasColumns() {
+        return hasColumns;
+    }
+
+    public boolean useBrackets() {
+        return useBrackets;
+    }
+
+    public void useBrackets(boolean useBrackets) {
+        this.useBrackets = useBrackets;
+    }
+
+    public void hasColumn(boolean hasColumn) {
+        this.hasColumn = hasColumn;
+    }
+
+    public void hasColumns(boolean hasColumns) {
+        this.hasColumns = hasColumns;
+    }
+
+    /**
+     * @deprecated Use {@link #getIndex()} with
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public String getFkSourceSchema() {
+        return fkSourceSchema;
+    }
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public void setFkSourceSchema(String fkSourceSchema) {
+        this.fkSourceSchema = fkSourceSchema;
+    }
+
+    public String getCommentText() {
+        return commentText;
+    }
+
+    public void setCommentText(String commentText) {
+        this.commentText = commentText;
+    }
+
+    public String getTableOption() {
+        return tableOption;
+    }
+
+    public void setTableOption(String tableOption) {
+        this.tableOption = tableOption;
+    }
+
+    public AlterOperation getOperation() {
+        return operation;
+    }
+
+    public void setOperation(AlterOperation operation) {
+        this.operation = operation;
+    }
+
+    public String getOptionalSpecifier() {
+        return optionalSpecifier;
+    }
+
+    public void setOptionalSpecifier(String optionalSpecifier) {
+        this.optionalSpecifier = optionalSpecifier;
+    }
+
+    /**
+     * @param type
+     * @param action
+     * @deprecated Standalone FK fields are deprecated. Use a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} via
+     *             {@link #setIndex(Index)} instead.
+     */
+    @Deprecated
+    public void setReferentialAction(Type type, Action action) {
+        setReferentialAction(type, action, true);
+    }
+
+    /**
+     * @deprecated Standalone FK fields are deprecated.
+     */
+    @Deprecated
+    public AlterExpression withReferentialAction(Type type, Action action) {
+        setReferentialAction(type, action);
+        return this;
+    }
+
+    /**
+     * @param type
+     * @deprecated Standalone FK fields are deprecated.
+     */
+    @Deprecated
+    public void removeReferentialAction(Type type) {
+        setReferentialAction(type, null, false);
+    }
+
+    /**
+     * @param type
+     * @return
+     * @deprecated Standalone FK fields are deprecated.
+     */
+    @Deprecated
+    public ReferentialAction getReferentialAction(Type type) {
+        return referentialActions.stream()
+                .filter(ra -> type.equals(ra.getType()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void setReferentialAction(Type type, Action action, boolean set) {
+        ReferentialAction found = getReferentialAction(type);
+        if (set) {
+            if (found == null) {
+                referentialActions.add(new ReferentialAction(type, action));
+            } else {
+                found.setAction(action);
+            }
+        } else if (found != null) {
+            referentialActions.remove(found);
+        }
+    }
+
+    /**
+     * @return
+     * @deprecated use {@link #getReferentialAction(ReferentialAction.Type)}
+     */
+    @Deprecated
+    public boolean isOnDeleteCascade() {
+        ReferentialAction found = getReferentialAction(Type.DELETE);
+        return found != null && Action.CASCADE.equals(found.getAction());
+    }
+
+    /**
+     * @param onDeleteCascade
+     * @deprecated use
+     *             {@link #setReferentialAction(ReferentialAction.Type, ReferentialAction.Action, boolean)}
+     */
+    @Deprecated
+    public void setOnDeleteCascade(boolean onDeleteCascade) {
+        setReferentialAction(Type.DELETE, Action.CASCADE, onDeleteCascade);
+    }
+
+    /**
+     * @return
+     * @deprecated use {@link #getReferentialAction(ReferentialAction.Type)}
+     */
+    @Deprecated
+    public boolean isOnDeleteRestrict() {
+        ReferentialAction found = getReferentialAction(Type.DELETE);
+        return found != null && Action.RESTRICT.equals(found.getAction());
+    }
+
+    /**
+     * @param onDeleteRestrict
+     * @deprecated use
+     *             {@link #setReferentialAction(ReferentialAction.Type, ReferentialAction.Action, boolean)}
+     */
+    @Deprecated
+    public void setOnDeleteRestrict(boolean onDeleteRestrict) {
+        setReferentialAction(Type.DELETE, Action.RESTRICT, onDeleteRestrict);
+    }
+
+    /**
+     * @return
+     * @deprecated use {@link #getReferentialAction(ReferentialAction.Type)}
+     */
+    @Deprecated
+    public boolean isOnDeleteSetNull() {
+        ReferentialAction found = getReferentialAction(Type.DELETE);
+        return found != null && Action.SET_NULL.equals(found.getAction());
+    }
+
+    /**
+     * @param onDeleteSetNull
+     * @deprecated use
+     *             {@link #setReferentialAction(ReferentialAction.Type, ReferentialAction.Action, boolean)}
+     */
+    @Deprecated
+    public void setOnDeleteSetNull(boolean onDeleteSetNull) {
+        setReferentialAction(Type.DELETE, Action.SET_NULL, onDeleteSetNull);
+    }
+
+    /**
+     * @deprecated Use {@link #getIndex()} with
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public List<String> getFkColumns() {
+        return fkColumns;
+    }
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public void setFkColumns(List<String> fkColumns) {
+        this.fkColumns = fkColumns;
+    }
+
+    /**
+     * @deprecated Use {@link #getIndex()} with
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public String getFkSourceTable() {
+        return fkSourceTable;
+    }
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public void setFkSourceTable(String fkSourceTable) {
+        this.fkSourceTable = fkSourceTable;
+    }
+
+    public List<ColumnDataType> getColDataTypeList() {
+        return colDataTypeList;
+    }
+
+    public void addColDataType(String columnName, ColDataType colDataType) {
+        addColDataType(new ColumnDataType(columnName, false, colDataType, null));
+    }
+
+    public void addColDataType(ColumnDataType columnDataType) {
+        if (colDataTypeList == null) {
+            colDataTypeList = new ArrayList<>();
+        }
+        colDataTypeList.add(columnDataType);
+    }
+
+    public void addColDropNotNull(ColumnDropNotNull columnDropNotNull) {
+        if (columnDropNotNullList == null) {
+            columnDropNotNullList = new ArrayList<>();
+        }
+        columnDropNotNullList.add(columnDropNotNull);
+    }
+
+    public void addColSetNotNull(ColumnSetNotNull columnSetNotNull) {
+        if (columnSetNotNullList == null) {
+            columnSetNotNullList = new ArrayList<>();
+        }
+        columnSetNotNullList.add(columnSetNotNull);
+    }
+
+    public List<ColumnDropDefault> getColumnDropDefaultList() {
+        return columnDropDefaultList;
+    }
+
+    public void addColDropDefault(ColumnDropDefault columnDropDefault) {
+        if (columnDropDefaultList == null) {
+            columnDropDefaultList = new ArrayList<>();
+        }
+        columnDropDefaultList.add(columnDropDefault);
+    }
+
+    public void addColSetDefault(ColumnSetDefault columnSetDefault) {
+        if (columnSetDefaultList == null) {
+            columnSetDefaultList = new ArrayList<>();
+        }
+        columnSetDefaultList.add(columnSetDefault);
+    }
+
+    public List<ColumnSetDefault> getColumnSetDefaultList() {
+        return columnSetDefaultList;
+    }
+
+    public void addColSetVisibility(ColumnSetVisibility columnSetVisibility) {
+        if (columnSetVisibilityList == null) {
+            columnSetVisibilityList = new ArrayList<>();
+        }
+        columnSetVisibilityList.add(columnSetVisibility);
+    }
+
+    public List<ColumnSetVisibility> getColumnSetVisibilityList() {
+        return columnSetVisibilityList;
+    }
+
+    /**
+     * @deprecated Use {@link #getIndex()} with
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public List<String> getFkSourceColumns() {
+        return fkSourceColumns;
+    }
+
+    /**
+     * @deprecated Use {@link #setIndex(Index)} with a
+     *             {@link net.sf.jsqlparser.statement.create.table.ForeignKeyIndex} instead.
+     */
+    @Deprecated
+    public void setFkSourceColumns(List<String> fkSourceColumns) {
+        this.fkSourceColumns = fkSourceColumns;
+    }
+
+    public String getNewTableName() {
+        return newTable == null ? null : newTable.getFullyQualifiedName();
+    }
+
+    public void setNewTableName(String newTableName) {
+        newTable = newTableName == null ? null : new Table(newTableName, false);
+    }
+
+    /** Returns the structured destination of a table rename. */
+    public Table getNewTable() {
+        return newTable;
+    }
+
+    public void setNewTable(Table newTable) {
+        this.newTable = newTable;
+    }
+
+    public AlterExpression withNewTable(Table newTable) {
+        setNewTable(newTable);
+        return this;
+    }
+
+    public TableRenameKeyword getTableRenameKeyword() {
+        return tableRenameKeyword;
+    }
+
+    public void setTableRenameKeyword(TableRenameKeyword tableRenameKeyword) {
+        this.tableRenameKeyword = tableRenameKeyword;
+    }
+
+    public String getColumnName() {
+        return columnName;
+    }
+
+    public void setColumnName(String columnName) {
+        this.columnName = columnName;
+    }
+
+    @Deprecated
+    public String getColOldName() {
+        return getColumnOldName();
+    }
+
+    @Deprecated
+    public void setColOldName(String columnOldName) {
+        setColumnOldName(columnOldName);
+    }
+
+    public String getColumnOldName() {
+        return columnOldName;
+    }
+
+    public void setColumnOldName(String columnOldName) {
+        this.columnOldName = columnOldName;
+    }
+
+    public String getConstraintName() {
+        return this.constraintName;
+    }
+
+    public void setConstraintName(final String constraintName) {
+        this.constraintName = constraintName;
+    }
+
+    public boolean isUsingIfExists() {
+        return usingIfExists;
+    }
+
+    public void setUsingIfExists(boolean usingIfExists) {
+        this.usingIfExists = usingIfExists;
+    }
+
+    /**
+     * Returns a snapshot of the rendered key elements for a structured PRIMARY_KEY, or the legacy
+     * list otherwise. Changing the snapshot does not change the index; use
+     * {@link #setPkColumns(List)} to replace its keys, or {@link Index#getColumns()} for structured
+     * edits.
+     */
+    public List<String> getPkColumns() {
+        return hasKeyIndex(Index.Kind.PRIMARY_KEY) ? index.getColumnsNames() : pkColumns;
+    }
+
+    /**
+     * Replaces a structured PRIMARY_KEY's elements using {@link Index#setColumnsNames(List)}. The
+     * strings are not parsed and existing element attributes are not retained, even when the
+     * rendered SQL is unchanged. Use {@link Index#setColumns(List)} to preserve structured
+     * elements. Without a matching index, stores the legacy list.
+     */
+    public void setPkColumns(List<String> pkColumns) {
+        if (hasKeyIndex(Index.Kind.PRIMARY_KEY)) {
+            index.setColumnsNames(pkColumns);
+            this.pkColumns = null;
+        } else {
+            this.pkColumns = pkColumns;
+        }
+    }
+
+    /**
+     * Returns a snapshot of the rendered key elements for a structured UNIQUE, or the legacy list
+     * otherwise. Changing the snapshot does not change the index; use {@link #setUkColumns(List)}
+     * to replace its keys, or {@link Index#getColumns()} for structured edits.
+     */
+    public List<String> getUkColumns() {
+        return hasKeyIndex(Index.Kind.UNIQUE) ? index.getColumnsNames() : ukColumns;
+    }
+
+    /**
+     * Replaces a structured UNIQUE's elements using {@link Index#setColumnsNames(List)}. The
+     * strings are not parsed and existing element attributes are not retained, even when the
+     * rendered SQL is unchanged. Use {@link Index#setColumns(List)} to preserve structured
+     * elements. Without a matching index, stores the legacy list.
+     */
+    public void setUkColumns(List<String> ukColumns) {
+        if (hasKeyIndex(Index.Kind.UNIQUE)) {
+            index.setColumnsNames(ukColumns);
+            this.ukColumns = null;
+        } else {
+            this.ukColumns = ukColumns;
+        }
+    }
+
+    private boolean hasKeyIndex(Index.Kind kind) {
+        return index != null && index.getKind() == kind;
+    }
+
+    public String getUkName() {
+        return ukName;
+    }
+
+    public void setUkName(String ukName) {
+        this.ukName = ukName;
+    }
+
+    public Index getIndex() {
+        return index;
+    }
+
+    public void setIndex(Index index) {
+        this.index = index;
+    }
+
+    public List<ConstraintState> getConstraints() {
+        return constraints;
+    }
+
+    public void setConstraints(List<ConstraintState> constraints) {
+        this.constraints = constraints;
+    }
+
+    public List<ColumnDropNotNull> getColumnDropNotNullList() {
+        return columnDropNotNullList;
+    }
+
+    public List<ColumnSetNotNull> getColumnSetNotNullList() {
+        return columnSetNotNullList;
+    }
+
+    public void addParameters(String... params) {
+        if (parameters == null) {
+            parameters = new ArrayList<>();
+        }
+        parameters.addAll(Arrays.asList(params));
+    }
+
+    public List<String> getParameters() {
+        return parameters;
+    }
+
+    public ConvertType getConvertType() {
+        return convertType;
+    }
+
+    public void setConvertType(ConvertType convertType) {
+        this.convertType = convertType;
+    }
+
+    public String getCharacterSet() {
+        return characterSet;
+    }
+
+    public void setCharacterSet(String characterSet) {
+        this.characterSet = characterSet;
+    }
+
+    public String getCollation() {
+        return collation;
+    }
+
+    public void setCollation(String collation) {
+        this.collation = collation;
+    }
+
+    public void setDefaultCollateSpecified(boolean value) {
+        this.defaultCollateSpecified = value;
+    }
+
+    public boolean isDefaultCollateSpecified() {
+        return defaultCollateSpecified;
+    }
+
+    public String getLockOption() {
+        return lockOption;
+    }
+
+    public void setLockOption(String lockOption) {
+        this.lockOption = lockOption;
+    }
+
+    public String getAlgorithmOption() {
+        return algorithmOption;
+    }
+
+    public void setAlgorithmOption(String algorithmOption) {
+        this.algorithmOption = algorithmOption;
+    }
+
+    public String getEngineOption() {
+        return engineOption;
+    }
+
+    public void setEngineOption(String engineOption) {
+        this.engineOption = engineOption;
+    }
+
+    public boolean getUseEqual() {
+        return useEqual;
+    }
+
+    public void setUseEqual(boolean useEqual) {
+        this.useEqual = useEqual;
+    }
+
+    public boolean getUk() {
+        return uk;
+    }
+
+    public void setUk(boolean uk) {
+        this.uk = uk;
+        this.ukTypeSpecified = true;
+    }
+
+    public boolean isUkTypeSpecified() {
+        return ukTypeSpecified;
+    }
+
+    public void setUkTypeSpecified(boolean ukTypeSpecified) {
+        this.ukTypeSpecified = ukTypeSpecified;
+    }
+
+    public boolean isUseIfNotExists() {
+        return useIfNotExists;
+    }
+
+    public void setUseIfNotExists(boolean useIfNotExists) {
+        this.useIfNotExists = useIfNotExists;
+    }
+
+    public AlterExpression withUserIfNotExists(boolean userIfNotExists) {
+        this.useIfNotExists = userIfNotExists;
+        return this;
+    }
+
+    public void setPartitionType(String partitionType) {
+        this.partitionType = partitionType;
+    }
+
+    public String getPartitionType() {
+        return partitionType;
+    }
+
+    public void setPartitionExpression(Expression partitionExpression) {
+        this.partitionExpression = partitionExpression;
+    }
+
+    public Expression getPartitionExpression() {
+        return partitionExpression;
+    }
+
+    public void setPartitionColumns(List<String> partitionColumns) {
+        this.partitionColumns = partitionColumns;
+    }
+
+    public List<String> getPartitionColumns() {
+        return partitionColumns;
+    }
+
+    public void setExchangePartitionTableName(String exchangePartitionTableName) {
+        this.exchangePartitionTableName = exchangePartitionTableName;
+    }
+
+    public String getExchangePartitionTableName() {
+        return exchangePartitionTableName;
+    }
+
+    public void setCoalescePartitionNumber(int coalescePartitionNumber) {
+        this.coalescePartitionNumber = coalescePartitionNumber;
+    }
+
+    public int getCoalescePartitionNumber() {
+        return coalescePartitionNumber;
+    }
+
+    public void setExchangePartitionWithValidation(boolean exchangePartitionWithValidation) {
+        this.exchangePartitionWithValidation = exchangePartitionWithValidation;
+    }
+
+    public boolean isExchangePartitionWithValidation() {
+        return exchangePartitionWithValidation;
+    }
+
+    public void setExchangePartitionWithoutValidation(boolean exchangePartitionWithoutValidation) {
+        this.exchangePartitionWithoutValidation = exchangePartitionWithoutValidation;
+    }
+
+    public boolean isExchangePartitionWithoutValidation() {
+        return exchangePartitionWithoutValidation;
+    }
+
+    public void setKeyBlockSize(int keyBlockSize) {
+        this.keyBlockSize = keyBlockSize;
+    }
+
+    public int getKeyBlockSize() {
+        return keyBlockSize;
+    }
+
+    public String getConstraintSymbol() {
+        return constraintSymbol;
+    }
+
+    public void setConstraintSymbol(String constraintSymbol) {
+        this.constraintSymbol = constraintSymbol;
+    }
+
+    public boolean isEnforced() {
+        return enforced;
+    }
+
+    public void setEnforced(boolean enforced) {
+        this.enforced = enforced;
+    }
+
+    public String getConstraintType() {
+        return constraintType;
+    }
+
+    public void setConstraintType(String constraintType) {
+        this.constraintType = constraintType;
+    }
+
+    public boolean isInvisible() {
+        return invisible;
+    }
+
+    public void setInvisible(boolean invisible) {
+        this.invisible = invisible;
+    }
+
+    @Override
+    public final String toString() {
+        StringBuilder b = new StringBuilder();
+        appendBody(b);
+        appendCommonTail(b);
+        return b.toString();
+    }
+
+    /**
+     * Appends the main body of this ALTER expression to the builder. Subclasses override this for
+     * type-specific rendering.
+     */
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity",
+            "PMD.ExcessiveMethodLength", "PMD.SwitchStmtsShouldHaveDefault"})
+    protected void appendBody(StringBuilder b) {
+        if (operation == AlterOperation.UNSPECIFIC) {
+            b.append(optionalSpecifier);
+        } else if (constraintType != null && constraintSymbol != null
+                && (operation == AlterOperation.ALTER || operation == AlterOperation.ADD)) {
+            toStringConstraintAlter(b);
+        } else if (operation == AlterOperation.ALTER
+                && (columnDropDefaultList != null && !columnDropDefaultList.isEmpty()
+                        || columnSetDefaultList != null && !columnSetDefaultList.isEmpty()
+                        || columnSetVisibilityList != null && !columnSetVisibilityList.isEmpty())) {
+            toStringAlterColumn(b);
+        } else if (isSimpleKeywordOperation()) {
+            toStringSimpleKeyword(b);
+        } else if (isRenameOperation()) {
+            toStringRename(b);
+        } else if (isDropSpecialOperation()) {
+            toStringDropSpecial(b);
+        } else if (operation == AlterOperation.CONVERT || operation == AlterOperation.COLLATE) {
+            toStringConvert(b);
+        } else if (isPartitionOperation()) {
+            toStringPartition(b);
+        } else {
+            toStringGeneral(b);
+        }
+    }
+
+    /**
+     * Appends the common tail (parameters, index comment) shared by all ALTER expressions.
+     */
+    protected void appendCommonTail(StringBuilder b) {
+        if (parameters != null && !parameters.isEmpty()) {
+            b.append(' ').append(PlainSelect.getStringList(parameters, false, false));
+        }
+        if (index != null && index.getCommentText() != null) {
+            b.append(" COMMENT ").append(index.getCommentText());
+        }
+    }
+
+    protected boolean isSimpleKeywordOperation() {
+        switch (operation) {
+            case SET_TABLE_OPTION:
+            case DISCARD_TABLESPACE:
+            case IMPORT_TABLESPACE:
+            case DISABLE_KEYS:
+            case ENABLE_KEYS:
+            case ENGINE:
+            case ALGORITHM:
+            case KEY_BLOCK_SIZE:
+            case LOCK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    protected boolean isRenameOperation() {
+        return getOldIndex() != null || operation == AlterOperation.RENAME_TABLE;
+    }
+
+    protected boolean isDropSpecialOperation() {
+        switch (operation) {
+            case DROP_PRIMARY_KEY:
+            case DROP_UNIQUE:
+            case DROP_FOREIGN_KEY:
+                return true;
+            case DROP:
+                return columnName == null && pkColumns != null && !pkColumns.isEmpty();
+            default:
+                return false;
+        }
+    }
+
+    protected boolean isPartitionOperation() {
+        switch (operation) {
+            case DISCARD_PARTITION:
+            case IMPORT_PARTITION:
+            case ATTACH_PARTITION:
+            case DETACH_PARTITION:
+            case TRUNCATE_PARTITION:
+            case COALESCE_PARTITION:
+            case REORGANIZE_PARTITION:
+            case EXCHANGE_PARTITION:
+            case ANALYZE_PARTITION:
+            case CHECK_PARTITION:
+            case OPTIMIZE_PARTITION:
+            case REBUILD_PARTITION:
+            case REPAIR_PARTITION:
+            case REMOVE_PARTITIONING:
+            case PARTITION_BY:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    protected void toStringConstraintAlter(StringBuilder b) {
+        if (operation == AlterOperation.ALTER) {
+            b.append("ALTER ").append(constraintType).append(" ").append(constraintSymbol);
+            if (invisible) {
+                b.append(" INVISIBLE");
+            } else if (!isEnforced()) {
+                b.append(" NOT ENFORCED");
+            } else if (enforced) {
+                b.append(" ENFORCED");
+            }
+        } else {
+            b.append("ADD CONSTRAINT ").append(constraintType).append(" ").append(constraintSymbol)
+                    .append(" ");
+            if (index != null && index.getColumnsNames() != null) {
+                b.append(" ")
+                        .append(PlainSelect.getStringList(index.getColumnsNames(), true, true));
+            }
+        }
+    }
+
+    protected void toStringAlterColumn(StringBuilder b) {
+        appendAlterColumn(b, b::append);
+    }
+
+    /** Renders ALTER COLUMN default/visibility actions with their common tail. */
+    public void appendColumnActionTo(StringBuilder b, Consumer<Expression> expressionPrinter) {
+        appendAlterColumn(b, expressionPrinter);
+        appendCommonTail(b);
+    }
+
+    private void appendAlterColumn(StringBuilder b, Consumer<Expression> expressionPrinter) {
+        b.append("ALTER ");
+        if (hasColumn) {
+            b.append("COLUMN ");
+        }
+        if (columnDropDefaultList != null && !columnDropDefaultList.isEmpty()) {
+            b.append(PlainSelect.getStringList(columnDropDefaultList));
+        } else if (columnSetDefaultList != null && !columnSetDefaultList.isEmpty()) {
+            for (int i = 0; i < columnSetDefaultList.size(); i++) {
+                if (i > 0) {
+                    b.append(", ");
+                }
+                columnSetDefaultList.get(i).appendTo(b, expressionPrinter);
+            }
+        } else {
+            b.append(PlainSelect.getStringList(columnSetVisibilityList));
+        }
+    }
+
+    protected void toStringSimpleKeyword(StringBuilder b) {
+        switch (operation) {
+            case SET_TABLE_OPTION:
+                b.append(tableOption);
+                break;
+            case DISCARD_TABLESPACE:
+                b.append("DISCARD TABLESPACE");
+                break;
+            case IMPORT_TABLESPACE:
+                b.append("IMPORT TABLESPACE");
+                break;
+            case DISABLE_KEYS:
+                b.append("DISABLE KEYS");
+                break;
+            case ENABLE_KEYS:
+                b.append("ENABLE KEYS");
+                break;
+            case ENGINE:
+                b.append("ENGINE ");
+                if (useEqual) {
+                    b.append("= ");
+                }
+                b.append(engineOption);
+                break;
+            case ALGORITHM:
+                b.append("ALGORITHM ");
+                if (useEqual) {
+                    b.append("= ");
+                }
+                b.append(algorithmOption);
+                break;
+            case KEY_BLOCK_SIZE:
+                b.append("KEY_BLOCK_SIZE ");
+                if (useEqual) {
+                    b.append("= ");
+                }
+                b.append(keyBlockSize);
+                break;
+            case LOCK:
+                b.append("LOCK ");
+                if (useEqual) {
+                    b.append("= ");
+                }
+                b.append(lockOption);
+                break;
+        }
+    }
+
+    protected void toStringRename(StringBuilder b) {
+        if (getOldIndex() != null) {
+            b.append("RENAME");
+            switch (operation) {
+                case RENAME_KEY:
+                    b.append(" KEY ");
+                    break;
+                case RENAME_INDEX:
+                    b.append(" INDEX ");
+                    break;
+                case RENAME_CONSTRAINT:
+                    b.append(" CONSTRAINT ");
+                    break;
+            }
+            b.append(getOldIndex().getName()).append(" TO ").append(getIndex().getName());
+        } else {
+            b.append("RENAME TO ").append(getNewTableName());
+        }
+    }
+
+    protected void toStringDropSpecial(StringBuilder b) {
+        switch (operation) {
+            case DROP_PRIMARY_KEY:
+                b.append("DROP PRIMARY KEY ");
+                break;
+            case DROP_UNIQUE:
+                b.append("DROP UNIQUE (").append(PlainSelect.getStringList(pkColumns)).append(')');
+                break;
+            case DROP_FOREIGN_KEY:
+                b.append("DROP FOREIGN KEY (").append(PlainSelect.getStringList(pkColumns))
+                        .append(')');
+                break;
+            default:
+                // Oracle Multi Column Drop
+                b.append("DROP (").append(PlainSelect.getStringList(pkColumns)).append(')');
+                break;
+        }
+    }
+
+    protected void toStringConvert(StringBuilder b) {
+        if (operation == AlterOperation.CONVERT) {
+            if (convertType == ConvertType.CONVERT_TO) {
+                b.append("CONVERT TO CHARACTER SET ");
+            } else if (convertType == ConvertType.DEFAULT_CHARACTER_SET) {
+                b.append("DEFAULT CHARACTER SET ");
+                if (hasEqualForCharacterSet) {
+                    b.append("= ");
+                }
+            } else if (convertType == ConvertType.CHARACTER_SET) {
+                b.append("CHARACTER SET ");
+                if (hasEqualForCharacterSet) {
+                    b.append("= ");
+                }
+            }
+            if (getCharacterSet() != null) {
+                b.append(getCharacterSet());
+            }
+            if (getCollation() != null) {
+                b.append(" COLLATE ");
+                if (hasEqualForCollate) {
+                    b.append("= ");
+                }
+                b.append(getCollation());
+            }
+        } else {
+            if (isDefaultCollateSpecified()) {
+                b.append("DEFAULT ");
+            }
+            b.append("COLLATE ");
+            if (hasEqualForCollate) {
+                b.append("= ");
+            }
+            if (getCollation() != null) {
+                b.append(getCollation());
+            }
+        }
+    }
+
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity"})
+    protected void toStringPartition(StringBuilder b) {
+        switch (operation) {
+            case DISCARD_PARTITION:
+                b.append("DISCARD PARTITION ").append(PlainSelect.getStringList(partitions));
+                if (tableOption != null) {
+                    b.append(" ").append(tableOption);
+                }
+                break;
+            case IMPORT_PARTITION:
+                b.append("IMPORT PARTITION ").append(PlainSelect.getStringList(partitions));
+                if (tableOption != null) {
+                    b.append(" ").append(tableOption);
+                }
+                break;
+            case TRUNCATE_PARTITION:
+                b.append("TRUNCATE PARTITION ").append(PlainSelect.getStringList(partitions));
+                break;
+            case COALESCE_PARTITION:
+                b.append("COALESCE PARTITION ").append(coalescePartitionNumber);
+                break;
+            case REORGANIZE_PARTITION:
+                b.append("REORGANIZE PARTITION ")
+                        .append(PlainSelect.getStringList(partitions))
+                        .append(" INTO (")
+                        .append(partitionDefinitions.stream()
+                                .map(PartitionDefinition::toString)
+                                .collect(Collectors.joining(", ")))
+                        .append(")");
+                break;
+            case EXCHANGE_PARTITION:
+                b.append("EXCHANGE PARTITION ");
+                b.append(partitions.get(0)).append(" WITH TABLE ")
+                        .append(exchangePartitionTableName);
+                if (exchangePartitionWithValidation) {
+                    b.append(" WITH VALIDATION ");
+                } else if (exchangePartitionWithoutValidation) {
+                    b.append(" WITHOUT VALIDATION ");
+                }
+                break;
+            case ANALYZE_PARTITION:
+                b.append("ANALYZE PARTITION ").append(PlainSelect.getStringList(partitions));
+                break;
+            case CHECK_PARTITION:
+                b.append("CHECK PARTITION ").append(PlainSelect.getStringList(partitions));
+                break;
+            case OPTIMIZE_PARTITION:
+                b.append("OPTIMIZE PARTITION ").append(PlainSelect.getStringList(partitions));
+                break;
+            case REBUILD_PARTITION:
+                b.append("REBUILD PARTITION ").append(PlainSelect.getStringList(partitions));
+                break;
+            case REPAIR_PARTITION:
+                b.append("REPAIR PARTITION ").append(PlainSelect.getStringList(partitions));
+                break;
+            case REMOVE_PARTITIONING:
+                b.append("REMOVE PARTITIONING");
+                break;
+            case PARTITION_BY:
+                b.append("PARTITION BY ").append(partitionType).append(" ");
+                if (partitionExpression != null) {
+                    b.append("(").append(partitionExpression).append(") ");
+                } else if (partitionColumns != null && !partitionColumns.isEmpty()) {
+                    b.append("COLUMNS(").append(String.join(", ", partitionColumns)).append(") ");
+                }
+                b.append("(").append(partitionDefinitions.stream()
+                        .map(PartitionDefinition::toString)
+                        .collect(Collectors.joining(", ")))
+                        .append(")");
+                break;
+        }
+    }
+
+    /**
+     * Handles the general case for ADD, MODIFY, CHANGE, DROP (column), COMMENT, row-level security,
+     * and all field-based dispatch (columns, constraints, FK, UK, PK, index).
+     */
+    protected void toStringGeneral(StringBuilder b) {
+        toStringGeneral(b, b::append);
+    }
+
+    /** Appends a column-definition action, including its common tail. */
+    public void appendColumnDefinitionsTo(StringBuilder b, Consumer<Expression> expressionPrinter) {
+        toStringGeneral(b, column -> column.appendTo(b, expressionPrinter));
+        appendCommonTail(b);
+    }
+
+    @SuppressWarnings({"PMD.CyclomaticComplexity", "PMD.NPathComplexity",
+            "PMD.ExcessiveMethodLength"})
+    private void toStringGeneral(StringBuilder b, Consumer<ColumnDataType> columnPrinter) {
+        if (operation == AlterOperation.COMMENT_WITH_EQUAL_SIGN) {
+            b.append("COMMENT =").append(" ");
+        } else if (operation == AlterOperation.ENABLE_ROW_LEVEL_SECURITY) {
+            b.append("ENABLE ROW LEVEL SECURITY").append(" ");
+        } else if (operation == AlterOperation.DISABLE_ROW_LEVEL_SECURITY) {
+            b.append("DISABLE ROW LEVEL SECURITY").append(" ");
+        } else if (operation == AlterOperation.FORCE_ROW_LEVEL_SECURITY) {
+            b.append("FORCE ROW LEVEL SECURITY").append(" ");
+        } else if (operation == AlterOperation.NO_FORCE_ROW_LEVEL_SECURITY) {
+            b.append("NO FORCE ROW LEVEL SECURITY").append(" ");
+        } else {
+            b.append(operation).append(" ");
+        }
+        if (commentText != null) {
+            if (columnName != null) {
+                b.append(columnName).append(" COMMENT ");
+            }
+            b.append(commentText);
+        } else if (columnName != null) {
+            if (hasColumn) {
+                b.append("COLUMN ");
+            }
+            if (usingIfExists) {
+                b.append("IF EXISTS ");
+            }
+            if (operation == AlterOperation.RENAME) {
+                b.append(columnOldName).append(" TO ");
+            }
+            b.append(columnName);
+        } else if (getColDataTypeList() != null) {
+            if (operation == AlterOperation.CHANGE) {
+                if (optionalSpecifier != null) {
+                    b.append(optionalSpecifier).append(" ");
+                }
+                b.append(columnOldName).append(" ");
+            } else if (colDataTypeList.size() > 1) {
+                b.append("(");
+            } else {
+                if (hasColumn) {
+                    b.append("COLUMN ");
+                } else if (hasColumns) {
+                    b.append("COLUMNS ");
+                }
+                if (usingIfExists) {
+                    b.append("IF EXISTS ");
+                } else if (useIfNotExists) {
+                    b.append("IF NOT EXISTS ");
+                }
+            }
+            if (useBrackets && colDataTypeList.size() == 1) {
+                b.append(" ( ");
+            }
+            for (int i = 0; i < colDataTypeList.size(); i++) {
+                if (i > 0) {
+                    b.append(", ");
+                }
+                columnPrinter.accept(colDataTypeList.get(i));
+            }
+            if (useBrackets && colDataTypeList.size() == 1) {
+                b.append(" ) ");
+            }
+            if (colDataTypeList.size() > 1) {
+                b.append(")");
+            }
+        } else if (getColumnSetNotNullList() != null) {
+            b.append("COLUMN ");
+            b.append(PlainSelect.getStringList(columnSetNotNullList));
+        } else if (getColumnDropNotNullList() != null) {
+            b.append("COLUMN ");
+            b.append(PlainSelect.getStringList(columnDropNotNullList));
+        } else if (columnDropDefaultList != null && !columnDropDefaultList.isEmpty()) {
+            b.append("COLUMN ");
+            b.append(PlainSelect.getStringList(columnDropDefaultList));
+        } else if (constraintName != null) {
+            b.append("CONSTRAINT ");
+            if (usingIfExists) {
+                b.append("IF EXISTS ");
+            }
+            b.append(constraintName);
+        } else if (index != null) {
+            // The structured index is canonical. Legacy PK/UK/FK fields may also be populated for
+            // source compatibility, but cannot represent names, expressions, or index options.
+            b.append(index);
+        } else if (pkColumns != null) {
+            b.append("PRIMARY KEY (").append(PlainSelect.getStringList(pkColumns)).append(')');
+        } else if (ukColumns != null) {
+            b.append("UNIQUE");
+            if (ukName != null) {
+                if (isUkTypeSpecified()) {
+                    if (getUk()) {
+                        b.append(" KEY ");
+                    } else {
+                        b.append(" INDEX ");
+                    }
+                } else {
+                    b.append(" ");
+                }
+                b.append(ukName);
+            }
+            b.append(" (").append(PlainSelect.getStringList(ukColumns)).append(")");
+        } else if (fkColumns != null
+                && !(index instanceof net.sf.jsqlparser.statement.create.table.ForeignKeyIndex)) {
+            // @deprecated path - kept for backward compatibility when ForeignKeyIndex is not set
+            b.append("FOREIGN KEY (")
+                    .append(PlainSelect.getStringList(fkColumns))
+                    .append(") REFERENCES ")
+                    .append(
+                            fkSourceSchema != null && fkSourceSchema.trim().length() > 0
+                                    ? fkSourceSchema + "."
+                                    : "")
+                    .append(fkSourceTable)
+                    .append(" (")
+                    .append(PlainSelect.getStringList(fkSourceColumns))
+                    .append(")");
+            referentialActions.forEach(b::append);
+        }
+
+        if (getConstraints() != null && !getConstraints().isEmpty()) {
+            b.append(' ').append(PlainSelect.getStringList(constraints, false, false));
+        }
+        if (getUseEqual()) {
+            b.append('=');
+        }
+    }
+
+    public AlterExpression withOperation(AlterOperation operation) {
+        this.setOperation(operation);
+        return this;
+    }
+
+    public AlterExpression withOptionalSpecifier(String optionalSpecifier) {
+        this.setOptionalSpecifier(optionalSpecifier);
+        return this;
+    }
+
+    public AlterExpression withNewTableName(String newTableName) {
+        setNewTableName(newTableName);
+        return this;
+    }
+
+    public AlterExpression withTableRenameKeyword(TableRenameKeyword tableRenameKeyword) {
+        setTableRenameKeyword(tableRenameKeyword);
+        return this;
+    }
+
+    public AlterExpression withColumnName(String columnName) {
+        this.setColumnName(columnName);
+        return this;
+    }
+
+    public AlterExpression withPkColumns(List<String> pkColumns) {
+        this.setPkColumns(pkColumns);
+        return this;
+    }
+
+    public AlterExpression withUkColumns(List<String> ukColumns) {
+        this.setUkColumns(ukColumns);
+        return this;
+    }
+
+    public AlterExpression withUkName(String ukName) {
+        this.setUkName(ukName);
+        return this;
+    }
+
+    public AlterExpression withIndex(Index index) {
+        this.setIndex(index);
+        return this;
+    }
+
+    public AlterExpression withConstraintName(String constraintName) {
+        this.setConstraintName(constraintName);
+        return this;
+    }
+
+    public AlterExpression withUsingIfExists(boolean usingIfExists) {
+        this.setUsingIfExists(usingIfExists);
+        return this;
+    }
+
+    public AlterExpression withOnDeleteRestrict(boolean onDeleteRestrict) {
+        this.setOnDeleteRestrict(onDeleteRestrict);
+        return this;
+    }
+
+    public AlterExpression withOnDeleteSetNull(boolean onDeleteSetNull) {
+        this.setOnDeleteSetNull(onDeleteSetNull);
+        return this;
+    }
+
+    public AlterExpression withOnDeleteCascade(boolean onDeleteCascade) {
+        this.setOnDeleteCascade(onDeleteCascade);
+        return this;
+    }
+
+    @Deprecated
+    public AlterExpression withFkColumns(List<String> fkColumns) {
+        this.setFkColumns(fkColumns);
+        return this;
+    }
+
+    @Deprecated
+    public AlterExpression withFkSourceSchema(String fkSourceSchema) {
+        this.setFkSourceTable(fkSourceSchema);
+        return this;
+    }
+
+    @Deprecated
+    public AlterExpression withFkSourceTable(String fkSourceTable) {
+        this.setFkSourceTable(fkSourceTable);
+        return this;
+    }
+
+    @Deprecated
+    public AlterExpression withFkSourceColumns(List<String> fkSourceColumns) {
+        this.setFkSourceColumns(fkSourceColumns);
+        return this;
+    }
+
+    public AlterExpression withUk(boolean uk) {
+        this.setUk(uk);
+        return this;
+    }
+
+    public AlterExpression withUseEqual(boolean useEqual) {
+        this.setUseEqual(useEqual);
+        return this;
+    }
+
+    public AlterExpression withConstraints(List<ConstraintState> constraints) {
+        this.setConstraints(constraints);
+        return this;
+    }
+
+    public AlterExpression withCommentText(String commentText) {
+        this.setCommentText(commentText);
+        return this;
+    }
+
+    public AlterExpression withColumnOldName(String columnOldName) {
+        setColumnOldName(columnOldName);
+        return this;
+    }
+
+    /** Adds strings using the replacement semantics of {@link #setPkColumns(List)}. */
+    public AlterExpression addPkColumns(String... pkColumns) {
+        List<String> collection = Optional.ofNullable(getPkColumns()).orElseGet(ArrayList::new);
+        Collections.addAll(collection, pkColumns);
+        return this.withPkColumns(collection);
+    }
+
+    /** Adds strings using the replacement semantics of {@link #setPkColumns(List)}. */
+    public AlterExpression addPkColumns(Collection<String> pkColumns) {
+        List<String> collection = Optional.ofNullable(getPkColumns()).orElseGet(ArrayList::new);
+        collection.addAll(pkColumns);
+        return this.withPkColumns(collection);
+    }
+
+    /** Adds strings using the replacement semantics of {@link #setUkColumns(List)}. */
+    public AlterExpression addUkColumns(String... ukColumns) {
+        List<String> collection = Optional.ofNullable(getUkColumns()).orElseGet(ArrayList::new);
+        Collections.addAll(collection, ukColumns);
+        return this.withUkColumns(collection);
+    }
+
+    /** Adds strings using the replacement semantics of {@link #setUkColumns(List)}. */
+    public AlterExpression addUkColumns(Collection<String> ukColumns) {
+        List<String> collection = Optional.ofNullable(getUkColumns()).orElseGet(ArrayList::new);
+        collection.addAll(ukColumns);
+        return this.withUkColumns(collection);
+    }
+
+    @Deprecated
+    public AlterExpression addFkColumns(String... fkColumns) {
+        List<String> collection = Optional.ofNullable(getFkColumns()).orElseGet(ArrayList::new);
+        Collections.addAll(collection, fkColumns);
+        return this.withFkColumns(collection);
+    }
+
+    @Deprecated
+    public AlterExpression addFkColumns(Collection<String> fkColumns) {
+        List<String> collection = Optional.ofNullable(getFkColumns()).orElseGet(ArrayList::new);
+        collection.addAll(fkColumns);
+        return this.withFkColumns(collection);
+    }
+
+    @Deprecated
+    public AlterExpression addFkSourceColumns(String... fkSourceColumns) {
+        List<String> collection =
+                Optional.ofNullable(getFkSourceColumns()).orElseGet(ArrayList::new);
+        Collections.addAll(collection, fkSourceColumns);
+        return this.withFkSourceColumns(collection);
+    }
+
+    @Deprecated
+    public AlterExpression addFkSourceColumns(Collection<String> fkSourceColumns) {
+        List<String> collection =
+                Optional.ofNullable(getFkSourceColumns()).orElseGet(ArrayList::new);
+        collection.addAll(fkSourceColumns);
+        return this.withFkSourceColumns(collection);
+    }
+
+    public AlterExpression addConstraints(ConstraintState... constraints) {
+        List<ConstraintState> collection =
+                Optional.ofNullable(getConstraints()).orElseGet(ArrayList::new);
+        Collections.addAll(collection, constraints);
+        return this.withConstraints(collection);
+    }
+
+    public AlterExpression addConstraints(Collection<? extends ConstraintState> constraints) {
+        List<ConstraintState> collection =
+                Optional.ofNullable(getConstraints()).orElseGet(ArrayList::new);
+        collection.addAll(constraints);
+        return this.withConstraints(collection);
+    }
+
+    public List<String> getPartitions() {
+        return partitions;
+    }
+
+    public void setPartitions(List<String> partitions) {
+        this.partitions = partitions;
+    }
+
+    public List<PartitionDefinition> getPartitionDefinitions() {
+        return partitionDefinitions;
+    }
+
+    public void setPartitionDefinitions(List<PartitionDefinition> partitionDefinition) {
+        this.partitionDefinitions = partitionDefinition;
+    }
+
+    public void setHasEqualForCharacterSet(boolean hasEqualForCharacterSet) {
+        this.hasEqualForCharacterSet = hasEqualForCharacterSet;
+    }
+
+    public void setHasEqualForCollate(boolean hasEqualForCollate) {
+        this.hasEqualForCollate = hasEqualForCollate;
+    }
+
+    public static final class ColumnDataType extends ColumnDefinition {
+
+        private final boolean withType;
+        private Expression usingExpression;
+        private List<IdentityAlteration> identityAlterations;
+
+        public boolean isWithType() {
+            return withType;
+        }
+
+        public Expression getUsingExpression() {
+            return usingExpression;
+        }
+
+        public void setUsingExpression(Expression usingExpression) {
+            this.usingExpression = usingExpression;
+        }
+
+        public List<IdentityAlteration> getIdentityAlterations() {
+            return identityAlterations;
+        }
+
+        public void setIdentityAlterations(List<IdentityAlteration> identityAlterations) {
+            this.identityAlterations =
+                    identityAlterations == null ? null : new ArrayList<>(identityAlterations);
+        }
+
+        public ColumnDataType(boolean withType) {
+            super();
+            this.withType = withType;
+        }
+
+        public ColumnDataType(
+                String columnName, boolean withType, ColDataType colDataType,
+                List<String> columnSpecs) {
+            super(columnName, colDataType, columnSpecs);
+            this.withType = withType;
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder builder = new StringBuilder();
+            appendTo(builder, builder::append);
+            return builder.toString();
+        }
+
+        @Override
+        public void appendTo(StringBuilder builder, Consumer<Expression> expressionPrinter) {
+            builder.append(getColumnName());
+            if (identityAlterations != null) {
+                builder.append(' ')
+                        .append(PlainSelect.getStringList(identityAlterations, false, false));
+                return;
+            }
+            builder.append(withType ? " TYPE " : getColDataType() == null ? "" : " ");
+            appendDataTypeAndSpecTo(builder, expressionPrinter);
+            if (usingExpression != null) {
+                builder.append(" USING ");
+                expressionPrinter.accept(usingExpression);
+            }
+        }
+
+        @Override
+        public ColumnDataType withColDataType(ColDataType colDataType) {
+            return (ColumnDataType) super.withColDataType(colDataType);
+        }
+
+        @Override
+        public ColumnDataType withColumnName(String columnName) {
+            return (ColumnDataType) super.withColumnName(columnName);
+        }
+
+        @Override
+        public ColumnDataType addColumnSpecs(String... columnSpecs) {
+            return (ColumnDataType) super.addColumnSpecs(columnSpecs);
+        }
+
+        @Override
+        public ColumnDataType addColumnSpecs(Collection<String> columnSpecs) {
+            return (ColumnDataType) super.addColumnSpecs(columnSpecs);
+        }
+
+        @Override
+        public ColumnDataType withColumnSpecs(List<String> columnSpecs) {
+            return (ColumnDataType) super.withColumnSpecs(columnSpecs);
+        }
+    }
+
+    public static final class ColumnDropNotNull implements Serializable {
+
+        private final String columnName;
+        private final boolean withNot;
+
+        public ColumnDropNotNull(String columnName) {
+            this(columnName, false);
+        }
+
+        public ColumnDropNotNull(String columnName, boolean withNot) {
+            this.columnName = columnName;
+            this.withNot = withNot;
+        }
+
+        public String getColumnName() {
+            return columnName;
+        }
+
+        public boolean isWithNot() {
+            return withNot;
+        }
+
+        @Override
+        public String toString() {
+            return columnName + " DROP" + (withNot ? " NOT " : " ") + "NULL";
+        }
+    }
+
+    public static final class ColumnSetNotNull implements Serializable {
+
+        private final String columnName;
+
+        public ColumnSetNotNull(String columnName) {
+            this.columnName = columnName;
+        }
+
+        public String getColumnName() {
+            return columnName;
+        }
+
+        @Override
+        public String toString() {
+            return columnName + " SET NOT NULL";
+        }
+    }
+
+    public static final class ColumnDropDefault implements Serializable {
+
+        private final String columnName;
+
+        public ColumnDropDefault(String columnName) {
+            this.columnName = columnName;
+        }
+
+        public String getColumnName() {
+            return columnName;
+        }
+
+        @Override
+        public String toString() {
+            return columnName + " DROP DEFAULT";
+        }
+    }
+
+    public static final class ColumnSetDefault implements Serializable {
+        private final String columnName;
+        private String defaultValue;
+        private Expression defaultExpression;
+
+        public ColumnSetDefault(String columnName, String defaultValue) {
+            this.columnName = columnName;
+            this.defaultValue = defaultValue;
+        }
+
+        public String getColumnName() {
+            return columnName;
+        }
+
+        /** Constructs a structured default without overloading the legacy nullable String API. */
+        public static ColumnSetDefault fromExpression(String columnName, Expression expression) {
+            ColumnSetDefault result = new ColumnSetDefault(columnName, null);
+            result.setDefaultExpression(expression);
+            return result;
+        }
+
+        public Expression getDefaultExpression() {
+            return defaultExpression;
+        }
+
+        public void setDefaultExpression(Expression defaultExpression) {
+            this.defaultExpression = defaultExpression;
+            this.defaultValue = null;
+        }
+
+        public String getDefaultValue() {
+            return defaultExpression == null ? defaultValue : defaultExpression.toString();
+        }
+
+        public void appendTo(StringBuilder sql, Consumer<Expression> expressionPrinter) {
+            sql.append(columnName).append(" SET DEFAULT ");
+            if (defaultExpression == null) {
+                sql.append(defaultValue);
+            } else {
+                expressionPrinter.accept(defaultExpression);
+            }
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder sql = new StringBuilder();
+            appendTo(sql, sql::append);
+            return sql.toString();
+        }
+    }
+
+    public static final class ColumnSetVisibility implements Serializable {
+        private final String columnName;
+        private final boolean visible;
+
+        public ColumnSetVisibility(String columnName, boolean visible) {
+            this.columnName = columnName;
+            this.visible = visible;
+        }
+
+        public String getColumnName() {
+            return columnName;
+        }
+
+        public boolean isVisible() {
+            return visible;
+        }
+
+        @Override
+        public String toString() {
+            return columnName + " SET " + (visible ? " VISIBLE" : " INVISIBLE");
+        }
+    }
+
+    public enum ConvertType {
+        CONVERT_TO, DEFAULT_CHARACTER_SET, CHARACTER_SET
+    }
+}

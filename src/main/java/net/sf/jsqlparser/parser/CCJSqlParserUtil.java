@@ -1,0 +1,620 @@
+/*-
+ * #%L
+ * JSQLParser library
+ * %%
+ * Copyright (C) 2004 - 2019 JSQLParser
+ * %%
+ * Dual licensed under GNU LGPL 2.1 or Apache License 2.0
+ * #L%
+ */
+package net.sf.jsqlparser.parser;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
+import java.util.Stack;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import net.sf.jsqlparser.JSQLParserException;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.parser.feature.Feature;
+import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.Statements;
+import net.sf.jsqlparser.statement.create.table.ColDataType;
+
+/**
+ * Toolfunctions to start and use JSqlParser.
+ *
+ * @author toben
+ */
+
+@SuppressWarnings("PMD.CyclomaticComplexity")
+public final class CCJSqlParserUtil {
+    public final static Logger LOGGER = Logger.getLogger(CCJSqlParserUtil.class.getName());
+
+    static {
+        LOGGER.setLevel(Level.OFF);
+    }
+
+    private CCJSqlParserUtil() {}
+
+    public static Statement parse(Reader statementReader) throws JSQLParserException {
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        Statement statement;
+        CCJSqlParser parser = new CCJSqlParser(new StreamProvider(statementReader));
+        try {
+            statement = parseStatement(parser, executorService);
+        } finally {
+            executorService.shutdown();
+        }
+        return statement;
+    }
+
+    /**
+     * Parses a single SQL statement.
+     *
+     * @param sql the SQL statement to parse
+     * @return the parsed statement
+     * @throws JSQLParserException if the input is null, empty, or cannot be parsed
+     */
+    public static Statement parse(String sql) throws JSQLParserException {
+        return parse(sql, null);
+    }
+
+    /**
+     * Parses an sql statement while allowing via consumer to configure the used parser before.
+     * <p>
+     * For instance to activate SQLServer bracket quotation on could use:
+     * <p>
+     * {@code
+     * CCJSqlParserUtil.parse("select * from [mytable]", parser -> parser.withSquareBracketQuotation(true));
+     * }
+     *
+     * @param sql the SQL statement to parse
+     * @param consumer parser configuration callback, or {@code null}
+     * @return the parsed statement
+     * @throws JSQLParserException if the input is null, empty, or cannot be parsed
+     */
+    public static Statement parse(String sql, Consumer<CCJSqlParser> consumer)
+            throws JSQLParserException {
+
+        requireStatementInput(sql);
+
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        Statement statement;
+        try {
+            statement = parse(sql, executorService, consumer);
+        } catch (JSQLParserException ex) {
+            throw new JSQLParserException(sql, ex);
+        } finally {
+            executorService.shutdown();
+        }
+        return statement;
+    }
+
+    /**
+     * Parses a single SQL statement using the caller's executor, which is left open.
+     *
+     * @param sql the SQL statement to parse
+     * @param executorService executor to use for parsing
+     * @param consumer parser configuration callback, or {@code null}
+     * @return the parsed statement
+     * @throws JSQLParserException if the input is null, empty, or cannot be parsed
+     */
+    public static Statement parse(String sql, ExecutorService executorService,
+            Consumer<CCJSqlParser> consumer)
+            throws JSQLParserException {
+        requireStatementInput(sql);
+
+        Statement statement;
+        // first, try to parse fast and simple
+        CCJSqlParser parser = newParser(sql);
+        if (consumer != null) {
+            consumer.accept(parser);
+        }
+        boolean allowComplex = parser.getAsBoolean(Feature.allowComplexParsing);
+        int allowedNestingDepth = parser.getAsInt(Feature.allowedNestingDepth);
+        LOGGER.info("Allowed Complex Parsing: " + allowComplex);
+        try {
+            LOGGER.info("Trying SIMPLE parsing " + (allowComplex ? "first" : "only"));
+            statement = parseStatement(parser.withAllowComplexParsing(false), executorService);
+        } catch (JSQLParserException ex) {
+            if (wasExecutionStopped(ex)) {
+                throw ex;
+            }
+            LOGGER.info("Nesting Depth" + getNestingDepth(sql));
+            if (allowComplex
+                    && (allowedNestingDepth < 0 || getNestingDepth(sql) <= allowedNestingDepth)) {
+                LOGGER.info("Trying COMPLEX parsing when SIMPLE parsing failed");
+                // beware: the parser must not be reused, but needs to be re-initiated
+                parser = newParser(sql);
+                if (consumer != null) {
+                    consumer.accept(parser);
+                }
+                statement = parseStatement(parser.withAllowComplexParsing(true), executorService);
+            } else {
+                throw ex;
+            }
+        }
+        return statement;
+    }
+
+    private static void requireStatementInput(String sql) throws JSQLParserException {
+        if (sql == null || sql.isEmpty()) {
+            throw new JSQLParserException("SQL statement must not be null or empty.");
+        }
+    }
+
+    public static CCJSqlParser newParser(String sql) {
+        if (sql == null || sql.isEmpty()) {
+            return null;
+        }
+
+        return new CCJSqlParser(new StringProvider(sql));
+    }
+
+    public static CCJSqlParser newParser(InputStream is) throws IOException {
+        return new CCJSqlParser(new StreamProvider(is));
+    }
+
+    public static CCJSqlParser newParser(InputStream is, String encoding) throws IOException {
+        return new CCJSqlParser(new StreamProvider(is, encoding));
+    }
+
+    public static Node parseAST(String sql) throws JSQLParserException {
+        if (sql == null || sql.isEmpty()) {
+            return null;
+        }
+
+        CCJSqlParser parser = newParser(sql);
+        try {
+            parser.Statement();
+            return parser.jjtree.rootNode();
+        } catch (Exception ex) {
+            throw new JSQLParserException(ex);
+        }
+    }
+
+    public static Statement parse(InputStream is) throws JSQLParserException {
+        try {
+            CCJSqlParser parser = newParser(is);
+            return parser.Statement();
+        } catch (Exception ex) {
+            throw new JSQLParserException(ex);
+        }
+    }
+
+    public static Statement parse(InputStream is, String encoding) throws JSQLParserException {
+        try {
+            CCJSqlParser parser = newParser(is, encoding);
+            return parser.Statement();
+        } catch (Exception ex) {
+            throw new JSQLParserException(ex);
+        }
+    }
+
+    public static Expression parseExpression(String expression) throws JSQLParserException {
+        if (expression == null || expression.isEmpty()) {
+            return null;
+        }
+
+        return parseExpression(expression, true);
+    }
+
+    public static Expression parseExpression(String expression, boolean allowPartialParse)
+            throws JSQLParserException {
+        if (expression == null || expression.isEmpty()) {
+            return null;
+        }
+
+        return parseExpression(expression, allowPartialParse, p -> {
+        });
+    }
+
+    /**
+     * Parses a column data type fragment. The complete input must represent the data type; trailing
+     * tokens are rejected.
+     *
+     * @param columnDataType the column data type fragment to parse
+     * @return the parsed column data type, or {@code null} for a null or empty input
+     * @throws JSQLParserException when the input cannot be parsed completely
+     * @see #parseColDataType(String, Consumer)
+     */
+    public static ColDataType parseColDataType(String columnDataType) throws JSQLParserException {
+        return parseColDataType(columnDataType, null);
+    }
+
+    /**
+     * Parses a column data type fragment while allowing the parser to be configured. The complete
+     * input must represent the data type; trailing tokens are rejected.
+     *
+     * @param columnDataType the column data type fragment to parse
+     * @param consumer parser configuration callback, or {@code null}
+     * @return the parsed column data type, or {@code null} for a null or empty input
+     * @throws JSQLParserException when the input cannot be parsed completely
+     */
+    public static ColDataType parseColDataType(String columnDataType,
+            Consumer<CCJSqlParser> consumer) throws JSQLParserException {
+        if (columnDataType == null || columnDataType.isEmpty()) {
+            return null;
+        }
+
+        try {
+            return parseColDataType(columnDataType, false, consumer);
+        } catch (JSQLParserException ex) {
+            return parseColDataType(columnDataType, true, consumer);
+        }
+    }
+
+    private static ColDataType parseColDataType(String columnDataType, boolean allowComplexParsing,
+            Consumer<CCJSqlParser> consumer) throws JSQLParserException {
+        CCJSqlParser parser = newParser(columnDataType)
+                .withAllowComplexParsing(allowComplexParsing);
+        if (consumer != null) {
+            consumer.accept(parser);
+        }
+
+        try {
+            ColDataType result = parser.ColDataType();
+            if (parser.getNextToken().kind != CCJSqlParserTokenManager.EOF) {
+                throw new JSQLParserException(
+                        "could only parse partial column data type " + result);
+            }
+            return result;
+        } catch (ParseException ex) {
+            throw new JSQLParserException(columnDataType, ex);
+        }
+    }
+
+    @SuppressWarnings("PMD.CyclomaticComplexity")
+    public static Expression parseExpression(String expressionStr, boolean allowPartialParse,
+            Consumer<CCJSqlParser> consumer) throws JSQLParserException {
+        if (expressionStr == null || expressionStr.isEmpty()) {
+            return null;
+        }
+
+        Expression expression = null;
+        // first, try to parse fast and simple
+        try {
+            CCJSqlParser parser = newParser(expressionStr).withAllowComplexParsing(false);
+            if (consumer != null) {
+                consumer.accept(parser);
+            }
+            try {
+                expression = parser.Expression();
+                if (parser.getNextToken().kind != CCJSqlParserTokenManager.EOF) {
+                    throw new JSQLParserException(
+                            "could only parse partial expression " + expression.toString());
+                }
+            } catch (ParseException ex) {
+                throw new JSQLParserException(expressionStr, ex);
+            }
+        } catch (JSQLParserException ex1) {
+            // when fast simple parsing fails, try complex parsing but only if it has a chance to
+            // succeed
+            CCJSqlParser parser = newParser(expressionStr).withAllowComplexParsing(true);
+            if (consumer != null) {
+                consumer.accept(parser);
+            }
+            try {
+                expression = parser.Expression();
+                if (!allowPartialParse
+                        && parser.getNextToken().kind != CCJSqlParserTokenManager.EOF) {
+                    throw new JSQLParserException(
+                            "could only parse partial expression " + expression.toString());
+                }
+            } catch (JSQLParserException ex) {
+                throw ex;
+            } catch (ParseException ex) {
+                throw new JSQLParserException(ex);
+            }
+        }
+        return expression;
+    }
+
+    /**
+     * Parse an conditional expression. This is the expression after a where clause. Partial parsing
+     * is enabled.
+     *
+     * @param condExpr
+     * @return the expression parsed
+     * @see #parseCondExpression(String, boolean)
+     */
+    public static Expression parseCondExpression(String condExpr) throws JSQLParserException {
+        if (condExpr == null || condExpr.isEmpty()) {
+            return null;
+        }
+        return parseCondExpression(condExpr, true);
+    }
+
+    /**
+     * Parse an conditional expression. This is the expression after a where clause.
+     *
+     * @param condExpr
+     * @param allowPartialParse false: needs the whole string to be processed.
+     * @return the expression parsed
+     * @see #parseCondExpression(String)
+     */
+    public static Expression parseCondExpression(String condExpr, boolean allowPartialParse)
+            throws JSQLParserException {
+        if (condExpr == null || condExpr.isEmpty()) {
+            return null;
+        }
+        return parseCondExpression(condExpr, allowPartialParse, p -> {
+        });
+    }
+
+    @SuppressWarnings("PMD.CyclomaticComplexity")
+    public static Expression parseCondExpression(String conditionalExpressionStr,
+            boolean allowPartialParse, Consumer<CCJSqlParser> consumer) throws JSQLParserException {
+        if (conditionalExpressionStr == null || conditionalExpressionStr.isEmpty()) {
+            return null;
+        }
+
+        Expression expression = null;
+        // first, try to parse fast and simple
+        try {
+            CCJSqlParser parser =
+                    newParser(conditionalExpressionStr).withAllowComplexParsing(false);
+            if (consumer != null) {
+                consumer.accept(parser);
+            }
+            try {
+                expression = parser.Expression();
+                if (parser.getNextToken().kind != CCJSqlParserTokenManager.EOF) {
+                    throw new JSQLParserException(
+                            "could only parse partial expression " + expression.toString());
+                }
+            } catch (ParseException ex) {
+                throw new JSQLParserException(ex);
+            }
+        } catch (JSQLParserException ex1) {
+            CCJSqlParser parser =
+                    newParser(conditionalExpressionStr).withAllowComplexParsing(true);
+            if (consumer != null) {
+                consumer.accept(parser);
+            }
+            try {
+                expression = parser.Expression();
+                if (!allowPartialParse
+                        && parser.getNextToken().kind != CCJSqlParserTokenManager.EOF) {
+                    throw new JSQLParserException(
+                            "could only parse partial expression " + expression.toString());
+                }
+            } catch (JSQLParserException ex) {
+                throw ex;
+            } catch (ParseException ex) {
+                throw new JSQLParserException(ex);
+            }
+        }
+        return expression;
+    }
+
+    /**
+     * @param parser the Parser armed with a Statement text
+     * @param executorService the Executor Service for parsing within a Thread
+     * @return the parsed Statement
+     * @throws JSQLParserException when either the Statement can't be parsed or the configured
+     *         timeout is reached
+     */
+
+    public static Statement parseStatement(CCJSqlParser parser, ExecutorService executorService)
+            throws JSQLParserException {
+        return executeParser(parser, executorService, parser::Statement);
+    }
+
+    /**
+     * Parse a statement list.
+     *
+     * @return the statements parsed, or a new empty list for null or empty input
+     */
+    public static Statements parseStatements(String sqls) throws JSQLParserException {
+        return parseStatements(sqls, null);
+    }
+
+    /**
+     * Parses a statement list with optional parser configuration.
+     *
+     * @return the statements parsed, or a new empty list for null or empty input
+     */
+    public static Statements parseStatements(String sqls, Consumer<CCJSqlParser> consumer)
+            throws JSQLParserException {
+        if (sqls == null || sqls.isEmpty()) {
+            return new Statements();
+        }
+
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        try {
+            return parseStatements(sqls, executorService, consumer);
+        } finally {
+            executorService.shutdown();
+        }
+    }
+
+    /**
+     * Parses a statement list using the caller's executor, which is left open.
+     *
+     * @return the statements parsed, or a new empty list for null or empty input
+     */
+    public static Statements parseStatements(String sqls, ExecutorService executorService,
+            Consumer<CCJSqlParser> consumer)
+            throws JSQLParserException {
+        if (sqls == null || sqls.isEmpty()) {
+            return new Statements();
+        }
+
+        CCJSqlParser parser = newParser(sqls);
+        if (consumer != null) {
+            consumer.accept(parser);
+        }
+        boolean allowComplex = parser.getAsBoolean(Feature.allowComplexParsing);
+        int allowedNestingDepth = parser.getAsInt(Feature.allowedNestingDepth);
+
+        // first, try to parse fast and simple
+        try {
+            return parseStatements(parser.withAllowComplexParsing(false), executorService);
+        } catch (JSQLParserException ex) {
+            if (wasExecutionStopped(ex)) {
+                throw ex;
+            }
+            // when fast simple parsing fails, try complex parsing but only if it has a chance to
+            // succeed
+            if (allowComplex
+                    && (allowedNestingDepth < 0 || getNestingDepth(sqls) <= allowedNestingDepth)) {
+                // beware: parser must not be re-used but needs to be re-initiated
+                parser = newParser(sqls);
+                if (consumer != null) {
+                    consumer.accept(parser);
+                }
+                return parseStatements(parser.withAllowComplexParsing(true), executorService);
+            }
+            throw ex;
+        }
+    }
+
+    /**
+     * @param parser the Parser armed with a Statement text
+     * @param executorService the Executor Service for parsing within a Thread
+     * @return the Statements (representing a List of single statements)
+     * @throws JSQLParserException when either the Statement can't be parsed or the configured
+     *         timeout is reached
+     */
+    public static Statements parseStatements(CCJSqlParser parser, ExecutorService executorService)
+            throws JSQLParserException {
+        return executeParser(parser, executorService, parser::Statements);
+    }
+
+    private static <T> T executeParser(CCJSqlParser parser, ExecutorService executorService,
+            Callable<T> operation) throws JSQLParserException {
+        Future<T> future = executorService.submit(operation);
+        try {
+            return future.get(parser.getAsLong(Feature.timeOut), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            parser.interrupted = true;
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new JSQLParserException(ex);
+        } catch (TimeoutException ex) {
+            parser.interrupted = true;
+            future.cancel(true);
+            throw new JSQLParserException("Time out occurred.", ex);
+        } catch (CancellationException ex) {
+            parser.interrupted = true;
+            throw new JSQLParserException(ex);
+        } catch (ExecutionException ex) {
+            throw new JSQLParserException(ex);
+        }
+    }
+
+    private static boolean wasExecutionStopped(JSQLParserException exception) {
+        Throwable cause = exception.getCause();
+        return cause instanceof InterruptedException || cause instanceof TimeoutException
+                || cause instanceof CancellationException;
+    }
+
+    public static void streamStatements(StatementListener listener, InputStream is, String encoding)
+            throws JSQLParserException {
+        try {
+            CCJSqlParser parser = newParser(is, encoding);
+            do {
+                Statement stmt = parser.SingleStatement();
+                listener.accept(stmt);
+                if (parser.getToken(1).kind == CCJSqlParserTokenManager.ST_SEMICOLON) {
+                    parser.getNextToken();
+                }
+
+            } while (parser.getToken(1).kind != CCJSqlParserTokenManager.EOF);
+        } catch (Exception ex) {
+            throw new JSQLParserException(ex);
+        }
+    }
+
+    public static int getNestingDepth(String sql) {
+        int maxlevel = 0;
+        int level = 0;
+
+        char[] chars = sql.toCharArray();
+        for (char c : chars) {
+            switch (c) {
+                case '(':
+                    level++;
+                    break;
+                case ')':
+                    if (maxlevel < level) {
+                        maxlevel = level;
+                    }
+                    level--;
+                    break;
+                default:
+                    // Codazy/PMD insists in a Default statement
+            }
+        }
+        return maxlevel;
+    }
+
+    public static int getUnbalancedPosition(String text) {
+        Stack<Character> stack = new Stack<>();
+        boolean insideQuote = false;
+
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"' || c == '\'') {
+                if (!insideQuote) {
+                    stack.push(c); // Add quote to stack
+                } else if (stack.peek() == c) {
+                    stack.pop(); // Matching quote found, remove from stack
+                }
+                insideQuote = !insideQuote; // Toggle insideQuote flag
+            } else if (!insideQuote && (c == '(' || c == '[' || c == '{')) {
+                stack.push(c); // Add opening bracket to stack
+            } else if (!insideQuote && (c == ')' || c == ']' || c == '}')) {
+                if (stack.isEmpty()) {
+                    return i; // Return position of unbalanced closing bracket
+                }
+                char top = stack.pop();
+                if (c == ')' && top != '(' || c == ']' && top != '[' || c == '}' && top != '{') {
+                    return i; // Return position of unbalanced closing bracket
+                }
+            }
+        }
+
+        if (!stack.isEmpty()) {
+            char unbalanced = stack.peek();
+            for (int i = 0; i < text.length(); i++) {
+                if (text.charAt(i) == unbalanced) {
+                    return i; // Return position of unbalanced opening bracket or quote
+                }
+            }
+        }
+
+        return -1; // Return -1 if all brackets and quotes are balanced
+    }
+
+    public static String sanitizeSingleSql(String sqlStr) {
+        final Pattern SQL_DELIMITER_SPLIT =
+                Pattern.compile("((?:'[^']*+'|[^\\n])*+)");
+        final StringBuilder builder = new StringBuilder();
+        final Matcher matcher = SQL_DELIMITER_SPLIT.matcher(sqlStr);
+        while (matcher.find()) {
+            for (int i = 1; i <= matcher.groupCount(); i++) {
+                if (!matcher.group(i).isEmpty()) {
+                    builder.append("\n").append(matcher.group(i));
+                }
+            }
+        }
+        return builder.toString();
+    }
+
+}

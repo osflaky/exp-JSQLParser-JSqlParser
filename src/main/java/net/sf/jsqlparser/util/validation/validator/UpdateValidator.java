@@ -1,0 +1,73 @@
+/*-
+ * #%L
+ * JSQLParser library
+ * %%
+ * Copyright (C) 2004 - 2019 JSQLParser
+ * %%
+ * Dual licensed under GNU LGPL 2.1 or Apache License 2.0
+ * #L%
+ */
+package net.sf.jsqlparser.util.validation.validator;
+
+import net.sf.jsqlparser.parser.feature.Feature;
+import net.sf.jsqlparser.statement.select.OptionHint;
+import net.sf.jsqlparser.statement.update.Update;
+import net.sf.jsqlparser.util.validation.ValidationCapability;
+
+/**
+ * @author gitmotte
+ */
+public class UpdateValidator extends AbstractValidator<Update> {
+
+    @Override
+    public void validate(Update update) {
+
+        for (ValidationCapability c : getCapabilities()) {
+            validateFeature(c, Feature.update);
+            validateOptionalFeature(c, update.getFromItem(), Feature.updateFrom);
+            validateOptionalFeature(c, update.getStartJoins(), Feature.updateJoins);
+            validateOptionalFeature(c, update.getOrderByElements(), Feature.updateOrderBy);
+            validateOptionalFeature(c, update.getLimit(), Feature.updateLimit);
+            validateOptionalFeature(c, update.getReturningClause(),
+                    Feature.updateReturning);
+        }
+
+        if (!update.isTargetTableAlias()) {
+            validateOptionalFromItem(update.getTable());
+        }
+
+        validateOptional(update.getStartJoins(),
+                j -> getValidator(SelectValidator.class).validateOptionalJoins(j));
+
+        validateOptionalUpdateSets(update.getUpdateSets());
+
+        if (update.getFromItem() != null) {
+            validateOptionalFromItem(update.getFromItem());
+            validateOptional(update.getJoins(),
+                    j -> getValidator(SelectValidator.class).validateOptionalJoins(j));
+        }
+
+        validateOptionalForPortionClause(update.getForPortionClause());
+        validateOptionalExpression(update.getWhere());
+        validateOptionalOrderByElements(update.getOrderByElements());
+
+        if (update.getLimit() != null) {
+            getValidator(LimitValidator.class).validate(update.getLimit());
+        }
+
+        if (update.getOption() != null) {
+            for (OptionHint optionHint : update.getOption().getOptionHints()) {
+                validateOptionalExpression(optionHint.getValue());
+                if (optionHint.getParameters() != null) {
+                    optionHint.getParameters().forEach(this::validateOptionalExpression);
+                }
+            }
+        }
+
+        if (update.getReturningClause() != null) {
+            SelectValidator v = getValidator(SelectValidator.class);
+            update.getReturningClause().forEach(c -> c.accept(v, null));
+        }
+    }
+
+}
