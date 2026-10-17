@@ -1,0 +1,58 @@
+name: CI Pipeline
+
+on:
+  workflow_dispatch:
+
+# Least privilege by default; each job widens only what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  JAVA_VERSION: '17'
+  JAVA_DISTRIBUTION: 'temurin'
+
+jobs:
+  gradle_check:
+    name: Gradle Check (${{ matrix.os }}) [${{ matrix.expander_leg }}]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - os: macos-latest
+          expander_leg: macos-latest--arm64
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0          # required by the git-changelog / version derivation
+
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v5
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        cache-read-only: ${{ github.ref != 'refs/heads/master' }}
+
+    - name: Run Gradle Check
+      run: ./gradlew check --no-daemon
+
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v5
+      with:
+        name: test-reports-${{ matrix.os }}
+        path: |
+          build/reports/
+          build/test-results/
+        retention-days: 7
+        if-no-files-found: ignore
+
+    timeout-minutes: 150
